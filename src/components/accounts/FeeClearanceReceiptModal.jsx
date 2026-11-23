@@ -1,0 +1,546 @@
+import React, { useState, useEffect } from 'react';
+import {
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  Button,
+  Box,
+  Typography,
+  Stack,
+  IconButton,
+  Chip,
+  Alert,
+  CircularProgress,
+  useTheme,
+  useMediaQuery
+} from '@mui/material';
+import CloseIcon from '@mui/icons-material/Close';
+import PrintIcon from '@mui/icons-material/Print';
+import VerifiedIcon from '@mui/icons-material/Verified';
+import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
+import WhatsAppIcon from '@mui/icons-material/WhatsApp';
+import DrawIcon from '@mui/icons-material/Draw';
+import { QRCodeSVG } from 'qrcode.react';
+import { DigitalSignatureModal } from '../common';
+import { loadDB } from '../../services/storage';
+import { sendBillElementToWhatsApp, renderWhatsAppTemplate } from '../../services/whatsappCloudApi';
+
+// Official Global Era Technical Crest
+const OfficialSeal = () => (
+  <svg width="60" height="60" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <circle cx="50" cy="50" r="46" stroke="#c59b27" strokeWidth="3" fill="#0f2e5a" />
+    <circle cx="50" cy="50" r="40" stroke="#f59e0b" strokeWidth="1" strokeDasharray="3 2" />
+    <path
+      d="M50 24 L55 35 L67 36 L58 45 L61 57 L50 50 L39 57 L42 45 L33 36 L45 35 Z"
+      fill="#f59e0b"
+    />
+    <path
+      d="M30 65 C40 60, 48 62, 50 68 C52 62, 60 60, 70 65 C70 65, 60 56, 50 61 C40 56, 30 65, 30 65 Z"
+      fill="#ffffff"
+    />
+    <text x="50" y="86" textAnchor="middle" fill="#fef08a" fontSize="8" fontWeight="bold" letterSpacing="0.5">
+      GLOBAL ERA
+    </text>
+  </svg>
+);
+
+export default function FeeClearanceReceiptModal({ open, onClose, student, ledger, payments = [] }) {
+  const theme = useTheme();
+  const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
+  const [signatures, setSignatures] = useState(() => loadDB().companyProfile?.digitalSignatures || {});
+  const [digitallySigned, setDigitallySigned] = useState(true);
+  const [showStamp, setShowStamp] = useState(true);
+  const [signModalOpen, setSignModalOpen] = useState(false);
+  const [sendingWa, setSendingWa] = useState(false);
+  const [waFeedback, setWaFeedback] = useState(null);
+
+  useEffect(() => {
+    if (open) {
+      setSignatures(loadDB().companyProfile?.digitalSignatures || {});
+      setWaFeedback(null);
+    }
+  }, [open]);
+
+  if (!student || !ledger) return null;
+
+  const handlePrint = () => {
+    window.print();
+  };
+
+  const handleSendBillWhatsApp = async () => {
+    if (!student?.phone) {
+      setWaFeedback({ type: 'error', text: 'Student phone number is missing.' });
+      return;
+    }
+    setSendingWa(true);
+    setWaFeedback(null);
+    try {
+      const due = Number(ledger?.due || 0);
+      const caption = renderWhatsAppTemplate(due <= 0 ? 'final_clearance_bill' : 'installment_receipt', {
+        name: student.name,
+        tgid: student.tgid || '-',
+        course: ledger.courseName || 'Vocational Course',
+        receiptNo: clearanceCertificateNo,
+        amount: Number(ledger.paid || 0).toLocaleString(),
+        totalFee: Number(ledger.totalFee || ledger.paid || 0).toLocaleString(),
+        paid: Number(ledger.paid || 0).toLocaleString(),
+        due: due.toLocaleString(),
+        date: todayStr,
+        method: 'Verified Ledger'
+      }) + (digitallySigned ? '\n✅ Digitally Signed & Verified' : '');
+      await sendBillElementToWhatsApp({
+        elementId: 'printableFeeClearanceCanvas',
+        phone: student.phone,
+        studentName: student.name,
+        filename: `${clearanceCertificateNo}.png`,
+        caption
+      });
+      setWaFeedback({ type: 'success', text: `Signed bill sent to ${student.name} (${student.phone}) on WhatsApp!` });
+    } catch (err) {
+      setWaFeedback({ type: 'error', text: err.message });
+    } finally {
+      setSendingWa(false);
+    }
+  };
+
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const clearanceCertificateNo = `CLR-2081-${String(student.id || '').replace(/\D/g, '') || '01'}`;
+  const verifyUrl = `${window.location.origin}/?verify=${student.id}&clearance=true`;
+
+  // Student specific payments
+  const studentPayments = (payments || []).filter((p) => p.studentId === student.id);
+
+  return (
+    <Dialog open={open} onClose={onClose} maxWidth="md" fullWidth fullScreen={isMobile} scroll="paper">
+      {/* Top Action Toolbar */}
+      <DialogTitle
+        className="no-print"
+        sx={{
+          bgcolor: '#0f2e5a',
+          color: '#ffffff',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          py: 1.5,
+          px: 3
+        }}
+      >
+        <Stack direction="row" spacing={1.5} alignItems="center">
+          <VerifiedIcon sx={{ color: '#f59e0b', fontSize: 30 }} />
+          <Box>
+            <Typography variant="subtitle1" sx={{ fontWeight: 800 }}>
+              Fee Clearance Certificate & Receipt
+            </Typography>
+            <Typography variant="caption" sx={{ color: '#cbd5e1' }}>
+              Official certified document of 100% full fee payment
+            </Typography>
+          </Box>
+        </Stack>
+
+        <Stack direction="row" spacing={1}>
+          <Button
+            variant="contained"
+            color="warning"
+            startIcon={<PrintIcon />}
+            onClick={handlePrint}
+            sx={{ fontWeight: 800 }}
+          >
+            Print A4 Clearance Certificate
+          </Button>
+          <IconButton onClick={onClose} sx={{ color: '#cbd5e1' }}>
+            <CloseIcon />
+          </IconButton>
+        </Stack>
+      </DialogTitle>
+
+      <DialogContent sx={{ p: { xs: 2, sm: 3.5 }, bgcolor: '#e2e8f0' }}>
+        {/* Printable A4 Canvas */}
+        <Box
+          id="printableFeeClearanceCanvas"
+          sx={{
+            width: '100%',
+            maxWidth: '210mm',
+            bgcolor: '#ffffff',
+            mx: 'auto',
+            p: { xs: 2.5, sm: 4.5 },
+            boxSizing: 'border-box',
+            fontFamily: "'Segoe UI', 'Inter', Arial, sans-serif",
+            color: '#0f172a',
+            border: '2px solid #0f2e5a',
+            outline: '3px solid #c59b27',
+            outlineOffset: '-7px',
+            borderRadius: 1.5,
+            boxShadow: '0 8px 30px rgba(0,0,0,0.12)',
+            position: 'relative'
+          }}
+        >
+          {/* Top Header */}
+          <Box sx={{ borderBottom: '2.5px solid #0f2e5a', pb: 2, mb: 2.5 }}>
+            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+              <Box sx={{ display: 'flex', gap: 2, alignItems: 'center' }}>
+                <OfficialSeal />
+                <Box>
+                  <Typography
+                    variant="h5"
+                    sx={{
+                      fontWeight: 900,
+                      color: '#0f2e5a',
+                      textTransform: 'uppercase',
+                      letterSpacing: '0.03em',
+                      fontSize: { xs: '1.15rem', sm: '1.35rem' },
+                      lineHeight: 1.2
+                    }}
+                  >
+                    Global Era Multi Service Pvt. Ltd.
+                  </Typography>
+                  <Typography
+                    variant="subtitle1"
+                    sx={{ fontWeight: 800, color: '#b45309', fontSize: { xs: '0.95rem', sm: '1.08rem' } }}
+                  >
+                    Technical School Jorpati (Prabidhik School Jorpati)
+                  </Typography>
+                  <Typography variant="caption" sx={{ color: '#475569', display: 'block', mt: 0.3 }}>
+                    Gokarneshwor Municipality-05, Jorpati, Kathmandu | Phone: 01-4910715, 9705147147 | PAN No: 609876543
+                  </Typography>
+                </Box>
+              </Box>
+
+              {/* Status Badge */}
+              <Box sx={{ textAlign: 'right' }}>
+                <Box
+                  sx={{
+                    display: 'inline-block',
+                    border: '2px solid #059669',
+                    bgcolor: '#ecfdf5',
+                    color: '#065f46',
+                    fontWeight: 900,
+                    fontSize: '0.76rem',
+                    letterSpacing: '0.05em',
+                    px: 1.5,
+                    py: 0.5,
+                    borderRadius: 1,
+                    textTransform: 'uppercase'
+                  }}
+                >
+                  ✓ FULL FEE CLEARED
+                </Box>
+                <Typography variant="caption" sx={{ display: 'block', mt: 0.5, color: '#64748b' }}>
+                  Certificate No: <strong>{clearanceCertificateNo}</strong>
+                </Typography>
+                <Typography variant="caption" sx={{ display: 'block', color: '#64748b' }}>
+                  Date: <strong>{todayStr}</strong>
+                </Typography>
+              </Box>
+            </Box>
+          </Box>
+
+          {/* Document Title */}
+          <Box sx={{ textAlign: 'center', mb: 3 }}>
+            <Typography
+              variant="h6"
+              sx={{
+                fontWeight: 900,
+                color: '#0f2e5a',
+                textDecoration: 'underline',
+                textUnderlineOffset: '5px',
+                fontSize: { xs: '1.05rem', sm: '1.2rem' }
+              }}
+            >
+              Official Fee Clearance Certificate & Receipt
+            </Typography>
+            <Typography variant="caption" sx={{ color: '#64748b', fontWeight: 700, letterSpacing: '0.04em' }}>
+              OFFICIAL FULL FEE CLEARANCE CERTIFICATE & STATEMENT
+            </Typography>
+          </Box>
+
+          {/* Trainee Details Card */}
+          <Box
+            sx={{
+              bgcolor: '#f8fafc',
+              border: '1px solid #cbd5e1',
+              borderRadius: 1.5,
+              p: 2,
+              mb: 2.5,
+              fontSize: '0.86rem'
+            }}
+          >
+            <Typography variant="subtitle2" sx={{ fontWeight: 800, color: '#0f2e5a', borderBottom: '1px solid #e2e8f0', pb: 0.5, mb: 1.2 }}>
+              Trainee Dossier:
+            </Typography>
+            <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, 1fr)' }, gap: 1.2 }}>
+              <Box>Student Name: <strong>{student.name}</strong></Box>
+              <Box>Roll No / TGID: <strong>{student.id} ({student.tgid})</strong></Box>
+              <Box>Training / Course: <strong>{ledger.courseTitle}</strong></Box>
+              <Box>Batch / Group: <strong>{ledger.groupCode}</strong></Box>
+              <Box>Mobile Number: <strong>{student.phone}</strong></Box>
+              <Box>Citizenship / ID No: <strong>{student.citizenshipNumber || 'N/A'}</strong></Box>
+            </Box>
+          </Box>
+
+          {/* Financial Installment Timeline Table */}
+          <Box sx={{ mb: 3 }}>
+            <Typography variant="subtitle2" sx={{ fontWeight: 800, color: '#0f2e5a', mb: 1 }}>
+              Payment Schedule & History:
+            </Typography>
+            <Box sx={{ border: '1px solid #cbd5e1', borderRadius: 1.5, overflow: 'hidden' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.84rem' }}>
+                <thead>
+                  <tr style={{ backgroundColor: '#0f2e5a', color: '#ffffff', textAlign: 'left' }}>
+                    <th style={{ padding: '8px 12px' }}>Installment / Particulars</th>
+                    <th style={{ padding: '8px 12px' }}>Receipt No</th>
+                    <th style={{ padding: '8px 12px' }}>Date</th>
+                    <th style={{ padding: '8px 12px' }}>Payment Method</th>
+                    <th style={{ padding: '8px 12px', textAlign: 'right' }}>Amount (Rs.)</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr style={{ borderBottom: '1px solid #e2e8f0' }}>
+                    <td style={{ padding: '8px 12px' }}>Total Agreed Course Fee</td>
+                    <td style={{ padding: '8px 12px', color: '#64748b' }}>-</td>
+                    <td style={{ padding: '8px 12px', color: '#64748b' }}>-</td>
+                    <td style={{ padding: '8px 12px', color: '#64748b' }}>Standard Rate</td>
+                    <td style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 600 }}>
+                      Rs. {(Number(ledger?.lockedFee) || 0).toLocaleString()}
+                    </td>
+                  </tr>
+                  {(Number(ledger?.discountAmount) || 0) > 0 && (
+                    <tr style={{ borderBottom: '1px solid #e2e8f0', backgroundColor: '#fefce8' }}>
+                      <td style={{ padding: '8px 12px', color: '#b45309' }}>Approved Discount / Scholarship</td>
+                      <td style={{ padding: '8px 12px', color: '#b45309' }}>-</td>
+                      <td style={{ padding: '8px 12px', color: '#b45309' }}>-</td>
+                      <td style={{ padding: '8px 12px', color: '#b45309' }}>Institution Approval</td>
+                      <td style={{ padding: '8px 12px', textAlign: 'right', color: '#b45309', fontWeight: 600 }}>
+                        - Rs. {(Number(ledger?.discountAmount) || 0).toLocaleString()}
+                      </td>
+                    </tr>
+                  )}
+                  {/* Payments list */}
+                  {studentPayments.map((p, idx) => (
+                    <tr key={p.id} style={{ borderBottom: '1px solid #e2e8f0', backgroundColor: '#ecfdf5' }}>
+                      <td style={{ padding: '8px 12px', color: '#065f46', fontWeight: 700 }}>
+                        Installment #{idx + 1} ({idx === 0 ? 'Admission Advance' : 'Balance Payment'})
+                      </td>
+                      <td style={{ padding: '8px 12px', color: '#065f46' }}>{p.receiptNo || 'N/A'}</td>
+                      <td style={{ padding: '8px 12px', color: '#065f46' }}>{p.paymentDate}</td>
+                      <td style={{ padding: '8px 12px', color: '#065f46' }}>{p.paymentMethod}</td>
+                      <td style={{ padding: '8px 12px', textAlign: 'right', color: '#065f46', fontWeight: 800 }}>
+                        Rs. {(Number(p.amount) || 0).toLocaleString()}
+                      </td>
+                    </tr>
+                  ))}
+                  {/* Total Paid Row */}
+                  <tr style={{ backgroundColor: '#f0fdf4', borderTop: '2px solid #059669' }}>
+                    <td colSpan={4} style={{ padding: '10px 12px', fontWeight: 800, color: '#065f46', fontSize: '0.9rem' }}>
+                      Total Paid Amount
+                    </td>
+                    <td style={{ padding: '10px 12px', textAlign: 'right', fontWeight: 900, color: '#065f46', fontSize: '0.95rem' }}>
+                      Rs. {(Number(ledger?.totalPaid) || 0).toLocaleString()}
+                    </td>
+                  </tr>
+                  {/* Remaining Due Row */}
+                  <tr style={{ backgroundColor: '#ffffff', borderTop: '1.5px solid #cbd5e1' }}>
+                    <td colSpan={4} style={{ padding: '10px 12px', fontWeight: 900, color: '#0f2e5a', fontSize: '0.92rem' }}>
+                      OUTSTANDING DUE BALANCE
+                    </td>
+                    <td style={{ padding: '10px 12px', textAlign: 'right', fontWeight: 900, color: '#059669', fontSize: '1.05rem' }}>
+                      Rs. 0.00 (NIL)
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </Box>
+          </Box>
+
+          {/* Official Clearance Declaration Paragraph */}
+          <Box
+            sx={{
+              p: 2,
+              mb: 4,
+              bgcolor: '#eff6ff',
+              border: '1.5px solid #93c5fd',
+              borderRadius: 1.5,
+              fontSize: '0.84rem',
+              lineHeight: 1.6,
+              color: '#1e3a8a'
+            }}
+          >
+            <Stack direction="row" spacing={1} alignItems="flex-start">
+              <CheckCircleOutlineIcon sx={{ color: '#0284c7', mt: 0.2 }} />
+              <Typography variant="body2" sx={{ fontWeight: 600, color: '#1e3a8a' }}>
+                <strong>Official Clearance Declaration:</strong> This is to certify that the above-mentioned trainee <strong>{student.name}</strong> has cleared all training fees in full for the <strong>{ledger.courseTitle}</strong> program conducted at this institution. Full Fee Clearance is hereby granted to appear in internal and CTEVT skill examinations, receive official certificates, and be recommended for On-the-Job Training (OJT) and employment placement.
+              </Typography>
+            </Stack>
+          </Box>
+
+          {/* Signatures & Seal Section */}
+          <Box sx={{ mt: 5, pt: 2, borderTop: '1.5px solid #cbd5e1' }}>
+            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', px: 3 }}>
+              {/* Accountant Signature */}
+              <Box sx={{ textAlign: 'center', width: '200px' }}>
+                <Box sx={{ borderBottom: '1.5px dashed #475569', height: '48px', mb: 0.8, display: 'flex', alignItems: 'flex-end', justifyContent: 'center', pb: 0.3 }}>
+                  {digitallySigned && signatures.accountantSign && (
+                    <Box component="img" src={signatures.accountantSign} alt="Accountant Sign" sx={{ maxHeight: 44, maxWidth: 160, objectFit: 'contain' }} />
+                  )}
+                </Box>
+                <Typography variant="subtitle2" sx={{ fontWeight: 800, color: '#0f2e5a', fontSize: '0.85rem' }}>
+                  {signatures.accountantName || 'Finance Officer'}
+                </Typography>
+                <Typography variant="caption" sx={{ color: '#64748b', display: 'block' }}>
+                  Prabidhik School, Jorpati
+                </Typography>
+                {digitallySigned && signatures.accountantSign && (
+                  <Typography variant="caption" sx={{ color: '#059669', fontWeight: 800, fontSize: '0.62rem' }}>
+                    ✓ Digitally Signed
+                  </Typography>
+                )}
+              </Box>
+
+              {/* QR Code and Center Seal */}
+              <Box sx={{ textAlign: 'center', position: 'relative' }}>
+                {showStamp && signatures.stampImage && (
+                  <Box
+                    component="img"
+                    src={signatures.stampImage}
+                    alt="Official Institute Stamp"
+                    sx={{
+                      maxHeight: 68,
+                      maxWidth: 110,
+                      objectFit: 'contain',
+                      mx: 'auto',
+                      mb: 0.5,
+                      display: 'block'
+                    }}
+                  />
+                )}
+                <Box sx={{ bgcolor: '#ffffff', p: 0.5, border: '1px solid #cbd5e1', borderRadius: 1, display: 'inline-block', mb: 0.5 }}>
+                  <QRCodeSVG value={verifyUrl} size={64} level="M" />
+                </Box>
+                <Typography variant="caption" sx={{ display: 'block', color: '#64748b', fontSize: '0.68rem' }}>
+                  Digital Verification QR
+                </Typography>
+              </Box>
+
+              {/* Principal Signature */}
+              <Box sx={{ textAlign: 'center', width: '200px' }}>
+                <Box sx={{ borderBottom: '1.5px dashed #475569', height: '48px', mb: 0.8, display: 'flex', alignItems: 'flex-end', justifyContent: 'center', pb: 0.3 }}>
+                  {digitallySigned && signatures.principalSign && (
+                    <Box component="img" src={signatures.principalSign} alt="Principal Sign" sx={{ maxHeight: 44, maxWidth: 160, objectFit: 'contain' }} />
+                  )}
+                </Box>
+                <Typography variant="subtitle2" sx={{ fontWeight: 800, color: '#0f2e5a', fontSize: '0.85rem' }}>
+                  {signatures.principalName || 'Principal / Director'}
+                </Typography>
+                <Typography variant="caption" sx={{ color: '#64748b', display: 'block' }}>
+                  With Official Seal
+                </Typography>
+                {digitallySigned && signatures.principalSign && (
+                  <Typography variant="caption" sx={{ color: '#059669', fontWeight: 800, fontSize: '0.62rem' }}>
+                    ✓ Digitally Signed
+                  </Typography>
+                )}
+              </Box>
+            </Box>
+          </Box>
+        </Box>
+      </DialogContent>
+
+      {waFeedback && (
+        <Alert className="no-print" severity={waFeedback.type} onClose={() => setWaFeedback(null)} sx={{ mx: 2, my: 1 }}>
+          {waFeedback.text}
+        </Alert>
+      )}
+
+      <DialogActions className="no-print" sx={{ p: 2, bgcolor: '#ffffff', borderTop: '1px solid #e2e8f0', justifyContent: 'space-between', flexWrap: 'wrap', gap: 1 }}>
+        <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
+          <Chip
+            size="small"
+            icon={<VerifiedIcon sx={{ fontSize: 15 }} />}
+            label={digitallySigned ? 'Digitally Signed: ON' : 'Digitally Signed: OFF'}
+            onClick={() => setDigitallySigned((p) => !p)}
+            color={digitallySigned ? 'success' : 'default'}
+            variant={digitallySigned ? 'filled' : 'outlined'}
+            sx={{ cursor: 'pointer', fontWeight: 700 }}
+          />
+          <Chip
+            size="small"
+            label={showStamp ? 'Stamp: ON' : 'Stamp: OFF'}
+            onClick={() => setShowStamp((p) => !p)}
+            color={showStamp ? 'primary' : 'default'}
+            variant={showStamp ? 'filled' : 'outlined'}
+            sx={{ cursor: 'pointer', fontWeight: 700 }}
+          />
+          <Button size="small" variant="outlined" startIcon={<DrawIcon />} onClick={() => setSignModalOpen(true)}>
+            Manage Sign & Stamp
+          </Button>
+        </Stack>
+        <Stack direction="row" spacing={1.25} flexWrap="wrap">
+          <Button onClick={onClose} color="inherit">
+            Close
+          </Button>
+          <Button
+            variant="contained"
+            startIcon={sendingWa ? <CircularProgress size={15} color="inherit" /> : <WhatsAppIcon />}
+            onClick={handleSendBillWhatsApp}
+            disabled={sendingWa}
+            sx={{ bgcolor: '#16A34A', '&:hover': { bgcolor: '#15803D' }, fontWeight: 800 }}
+          >
+            {sendingWa ? 'Sending...' : 'Send on WhatsApp'}
+          </Button>
+          <Button
+            variant="contained"
+            color="primary"
+            startIcon={<PrintIcon />}
+            onClick={handlePrint}
+            sx={{ fontWeight: 800 }}
+          >
+            Print
+          </Button>
+        </Stack>
+      </DialogActions>
+
+      <DigitalSignatureModal
+        open={signModalOpen}
+        onClose={() => setSignModalOpen(false)}
+        onSaved={(sigs) => setSignatures(sigs)}
+      />
+
+      {/* Embedded CSS for Exact A4 Portrait Print */}
+      <style>{`
+        @page {
+          size: A4 portrait;
+          margin: 12mm 14mm;
+        }
+        @media print {
+          html, body {
+            margin: 0 !important;
+            padding: 0 !important;
+            background: #ffffff !important;
+            -webkit-print-color-adjust: exact !important;
+            print-color-adjust: exact !important;
+          }
+          body * {
+            visibility: hidden !important;
+          }
+          #printableFeeClearanceCanvas, #printableFeeClearanceCanvas * {
+            visibility: visible !important;
+          }
+          #printableFeeClearanceCanvas {
+            position: absolute !important;
+            left: 0 !important;
+            top: 0 !important;
+            width: 100% !important;
+            margin: 0 !important;
+            padding: 10mm 12mm !important;
+            box-shadow: none !important;
+            border: 2px solid #0f2e5a !important;
+            background: #ffffff !important;
+          }
+          .no-print {
+            display: none !important;
+          }
+        }
+      `}</style>
+    </Dialog>
+  );
+}

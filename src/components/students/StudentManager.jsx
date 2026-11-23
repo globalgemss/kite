@@ -1,0 +1,1741 @@
+import React, { useState, useMemo } from 'react';
+import {
+  Box,
+  Card,
+  Typography,
+  Button,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TableRow,
+  Chip,
+  IconButton,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  TextField,
+  MenuItem,
+  Stack,
+  Grid,
+  Avatar,
+  Paper,
+  Tabs,
+  Tab,
+  LinearProgress,
+  Tooltip,
+  ToggleButton,
+  ToggleButtonGroup,
+  InputAdornment,
+  TablePagination,
+  Checkbox,
+  useTheme,
+  useMediaQuery
+} from '@mui/material';
+import AddIcon from '@mui/icons-material/Add';
+import EditIcon from '@mui/icons-material/Edit';
+import SwapHorizIcon from '@mui/icons-material/SwapHoriz';
+import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
+import VisibilityIcon from '@mui/icons-material/Visibility';
+import QrCode2Icon from '@mui/icons-material/QrCode2';
+import WhatsAppIcon from '@mui/icons-material/WhatsApp';
+import FileDownloadIcon from '@mui/icons-material/FileDownload';
+import SchoolIcon from '@mui/icons-material/School';
+import CheckCircleIcon from '@mui/icons-material/CheckCircle';
+import HourglassEmptyIcon from '@mui/icons-material/HourglassEmpty';
+import ViewListIcon from '@mui/icons-material/ViewList';
+import ViewModuleIcon from '@mui/icons-material/ViewModule';
+import SearchIcon from '@mui/icons-material/Search';
+import CloseIcon from '@mui/icons-material/Close';
+import PersonAddAlt1Icon from '@mui/icons-material/PersonAddAlt1';
+import FingerprintIcon from '@mui/icons-material/Fingerprint';
+import TimelineIcon from '@mui/icons-material/Timeline';
+import CallIcon from '@mui/icons-material/Call';
+import { QRCodeSVG } from 'qrcode.react';
+import { loadDB, saveDB, getNextSequentialId, getNextBiometricId } from '../../services/storage';
+import { exportToExcel } from '../../services/exportUtils';
+import { openWhatsAppHubForContact } from '../../services/whatsappCloudApi';
+import { useAuth } from '../../context/AuthContext';
+import { useDialog } from '../../context/DialogContext';
+import { ResponsiveDataView, StatusBadge, EntityCard } from '../common';
+import StudentPaymentTimelineModal from '../accounts/StudentPaymentTimelineModal';
+import StudentProfileModal from './StudentProfileModal';
+import StudentIdCardModal from '../admission/StudentIdCardModal';
+
+export default function StudentManager() {
+  const theme = useTheme();
+  const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
+  const isBelowMd = useMediaQuery(theme.breakpoints.down('md'));
+  const [db, setDb] = useState(loadDB());
+  const { currentUser, isTrainer } = useAuth();
+  const { confirm, alert } = useDialog();
+
+  React.useEffect(() => {
+    const refreshDb = () => setDb(loadDB());
+    window.addEventListener('kite_db_updated', refreshDb);
+    window.addEventListener('kite_cloud_hydrated', refreshDb);
+    window.addEventListener('storage', refreshDb);
+    return () => {
+      window.removeEventListener('kite_db_updated', refreshDb);
+      window.removeEventListener('kite_cloud_hydrated', refreshDb);
+      window.removeEventListener('storage', refreshDb);
+    };
+  }, []);
+
+  const [openAddDialog, setOpenAddDialog] = useState(false);
+  const [editingItem, setEditingItem] = useState(null);
+  const [openBulkTransfer, setOpenBulkTransfer] = useState(false);
+  const [bulkSelectedIds, setBulkSelectedIds] = useState([]);
+  const [bulkTargetGroupId, setBulkTargetGroupId] = useState('');
+  const [bulkSearch, setBulkSearch] = useState('');
+  const [bulkSourceGroup, setBulkSourceGroup] = useState('ALL');
+  const [profileStudent, setProfileStudent] = useState(null);
+  const [idCardStudent, setIdCardStudent] = useState(null);
+  const [timelineStudent, setTimelineStudent] = useState(null);
+  const [profileTab, setProfileTab] = useState(0);
+
+  const [filterGroup, setFilterGroup] = useState('ALL');
+  const [statusFilter, setStatusFilter] = useState('ALL');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [viewMode, setViewMode] = useState(() =>
+    typeof window !== 'undefined' && window.innerWidth < 768 ? 'card' : 'table'
+  );
+  const [page, setPage] = useState(0);
+  const [rowsPerPage, setRowsPerPage] = useState(25);
+
+  const [formData, setFormData] = useState({
+    tgid: '',
+    biometricId: '',
+    name: '',
+    phone: '',
+    secondaryPhone: '',
+    email: '',
+    gender: 'Female',
+    dateOfBirth: '2002-01-01',
+    citizenshipNumber: '',
+    citizenshipDistrict: 'Kathmandu',
+    permanentAddress: '',
+    currentAddress: '',
+    fatherName: '',
+    motherName: '',
+    guardianContact: '',
+    groupId: '',
+    admissionDate: new Date().toISOString().slice(0, 10),
+    expectedEndDate: '',
+    status: 'Active',
+    photoUrl: ''
+  });
+
+  // Filter students based on trainer role & search
+  const allGroups = db.trainingGroups || [];
+  const myGroups = isTrainer
+    ? allGroups.filter((g) => g.trainerId === currentUser?.trainerId)
+    : allGroups;
+
+  let filteredStudents = db.students || [];
+  if (isTrainer) {
+    filteredStudents = filteredStudents.filter((s) => myGroups.some((g) => g.id === s.groupId));
+  }
+  if (filterGroup !== 'ALL') {
+    filteredStudents = filteredStudents.filter((s) => s.groupId === filterGroup);
+  }
+  if (statusFilter !== 'ALL') {
+    filteredStudents = filteredStudents.filter((s) => (s.status || '').toLowerCase() === statusFilter.toLowerCase());
+  }
+  if (searchQuery.trim()) {
+    const q = searchQuery.toLowerCase();
+    filteredStudents = filteredStudents.filter(
+      (s) =>
+        (s.name || '').toLowerCase().includes(q) ||
+        (s.tgid || '').toLowerCase().includes(q) ||
+        (s.biometricId && String(s.biometricId).toLowerCase().includes(q)) ||
+        (s.citizenshipNumber && s.citizenshipNumber.toLowerCase().includes(q)) ||
+        (s.phone || '').includes(q)
+    );
+  }
+
+  const paginatedStudents = useMemo(() => {
+    const start = page * rowsPerPage;
+    return filteredStudents.slice(start, start + rowsPerPage);
+  }, [filteredStudents, page, rowsPerPage]);
+
+  const handleOpenAdd = () => {
+    setEditingItem(null);
+    setFormData({
+      tgid: getNextSequentialId(db.students || [], 'TGID-', 3, 'tgid', 101),
+      biometricId: getNextBiometricId(db.students || [], 1001),
+      name: '',
+      phone: '',
+      secondaryPhone: '',
+      email: '',
+      gender: 'Female',
+      dateOfBirth: '2002-01-01',
+      citizenshipNumber: '',
+      citizenshipDistrict: 'Kathmandu',
+      permanentAddress: '',
+      currentAddress: '',
+      fatherName: '',
+      motherName: '',
+      guardianContact: '',
+      groupId: '',
+      admissionDate: new Date().toISOString().slice(0, 10),
+      expectedEndDate: '',
+      status: 'Active',
+      photoUrl: ''
+    });
+    setOpenAddDialog(true);
+  };
+
+  const handleOpenEdit = (std) => {
+    setEditingItem(std);
+    setFormData({ ...std });
+    setOpenAddDialog(true);
+  };
+
+  const handleGroupSelect = (grpId) => {
+    const grp = (db.trainingGroups || []).find((g) => g.id === grpId);
+    setFormData((prev) => ({
+      ...prev,
+      groupId: grpId,
+      courseId: grp?.courseId || prev.courseId,
+      expectedEndDate: grp ? grp.expectedEndDate || grp.endDate : prev.expectedEndDate
+    }));
+  };
+
+  const handleBulkTransferSave = () => {
+    if (!bulkSelectedIds.length) {
+      alert('Please select at least one student to transfer.');
+      return;
+    }
+    if (!bulkTargetGroupId) {
+      alert('Please select a destination Training Group.');
+      return;
+    }
+    const targetGrp = (db.trainingGroups || []).find((g) => g.id === bulkTargetGroupId);
+    const idSet = new Set(bulkSelectedIds);
+    const nowIso = new Date().toISOString();
+    const updatedTimeline = [...(db.studentTimelines || [])];
+    const updatedList = (db.students || []).map((s) => {
+      if (!idSet.has(s.id)) return s;
+      if (s.groupId !== bulkTargetGroupId) {
+        const oldGrp = (db.trainingGroups || []).find((g) => g.id === s.groupId);
+        updatedTimeline.push({
+          id: `TL-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          studentId: s.id,
+          eventType: 'Group Transfer',
+          title: 'Training Group Changed',
+          description: `Moved from ${oldGrp?.groupCode || s.groupId || 'Unassigned'} to ${targetGrp?.groupCode || bulkTargetGroupId}`,
+          createdAt: nowIso
+        });
+      }
+      return {
+        ...s,
+        groupId: bulkTargetGroupId,
+        courseId: targetGrp?.courseId || s.courseId,
+        expectedEndDate: targetGrp?.expectedEndDate || targetGrp?.endDate || s.expectedEndDate
+      };
+    });
+    const nextDb = { ...db, students: updatedList, studentTimelines: updatedTimeline };
+    saveDB(nextDb);
+    setDb(nextDb);
+    setOpenBulkTransfer(false);
+    setBulkSelectedIds([]);
+    setBulkTargetGroupId('');
+    setBulkSearch('');
+    setBulkSourceGroup('ALL');
+  };
+
+  const handleSave = () => {
+    if (!formData.name.trim() || !formData.phone.trim() || !formData.groupId) {
+      alert('Student Name, Phone, and Training Group are required.');
+      return;
+    }
+
+    let updatedList = [...(db.students || [])];
+    let updatedTimeline = [...(db.studentTimelines || [])];
+
+    if (editingItem) {
+      if (editingItem.groupId !== formData.groupId) {
+        const oldGrp = (db.trainingGroups || []).find((g) => g.id === editingItem.groupId);
+        const newGrp = (db.trainingGroups || []).find((g) => g.id === formData.groupId);
+        updatedTimeline.push({
+          id: `TL-${Date.now()}`,
+          studentId: editingItem.id,
+          eventType: 'Group Transfer',
+          title: 'Training Group Changed',
+          description: `Moved from ${oldGrp?.groupCode || editingItem.groupId || 'Unassigned'} to ${newGrp?.groupCode || formData.groupId}`,
+          createdAt: new Date().toISOString()
+        });
+      }
+      updatedList = updatedList.map((x) =>
+        x.id === editingItem.id ? { ...x, ...formData } : x
+      );
+    } else {
+      const newId = getNextSequentialId(updatedList, 'STD-', 2, 'id', 1);
+      const nextTgid = (formData.tgid || '').trim() || getNextSequentialId(updatedList, 'TGID-', 3, 'tgid', 101);
+      const nextBioId = (formData.biometricId || '').toString().trim() || getNextBiometricId(updatedList, 1001);
+      const newStudent = {
+        ...formData,
+        id: newId,
+        tgid: nextTgid,
+        biometricId: nextBioId
+      };
+      updatedList.push(newStudent);
+
+      // Automated Timeline Event!
+      updatedTimeline.push({
+        id: `TL-${Date.now()}`,
+        studentId: newId,
+        eventType: 'Admission',
+        title: 'New Student Enrolled',
+        description: `Enrolled into Group code: ${(db.trainingGroups || []).find((g) => g.id === formData.groupId)?.groupCode || 'Group'}`,
+        createdAt: new Date().toISOString()
+      });
+    }
+
+    const nextDb = { ...db, students: updatedList, studentTimelines: updatedTimeline };
+    saveDB(nextDb);
+    setDb(nextDb);
+    setOpenAddDialog(false);
+  };
+
+  const handleDelete = async (id) => {
+    const std = (db.students || []).find((s) => s.id === id);
+    const ok = await confirm({
+      type: 'danger',
+      title: 'Confirm Trainee Deletion',
+      message: `Are you sure you want to permanently delete all records for trainee "${std?.name || id}" (${std?.tgid || ''})?`,
+      detail: 'This action will permanently affect the student attendance, ledger fees, and skill evaluation history.',
+      confirmText: 'Yes, Delete',
+      confirmColor: '#DC2626'
+    });
+
+    if (ok) {
+      const nextDb = {
+        ...db,
+        students: (db.students || []).filter((x) => x.id !== id)
+      };
+      saveDB(nextDb);
+      setDb(nextDb);
+    }
+  };
+
+  const handleExportExcel = () => {
+    const exportData = filteredStudents.map((s) => {
+      const grp = (db.trainingGroups || []).find((g) => g.id === s.groupId);
+      const course = (db.courses || []).find((c) => c.id === grp?.courseId);
+      return {
+        TGID: s.tgid,
+        Name: s.name,
+        Phone: s.phone,
+        Gender: s.gender,
+        DOB: s.dateOfBirth,
+        Group: grp?.groupCode || '',
+        Shift: grp?.shift || '',
+        Course: course?.title || '',
+        AdmissionDate: s.admissionDate,
+        ExpectedEnd: s.expectedEndDate,
+        Address: s.currentAddress,
+        Status: s.status
+      };
+    });
+    exportToExcel(exportData, 'KITE_Students_Roster');
+  };
+
+  // Helper for Student Profile stats
+  const getStudentStats = (std) => {
+    if (!std) return { present: 0, absent: 0, late: 0, rate: 0, masteredCount: 0, totalUnits: 0 };
+    const atts = db.attendances.filter((a) => a.studentId === std.id);
+    const present = atts.filter((a) => a.status === 'present').length;
+    const absent = atts.filter((a) => a.status === 'absent').length;
+    const late = atts.filter((a) => a.status === 'late').length;
+    const total = atts.length;
+    const rate = total > 0 ? Math.round((present / total) * 100) : 100;
+
+    const grp = (db.trainingGroups || []).find((g) => g.id === std.groupId);
+    const trainer = (db.trainers || []).find((t) => t.id === grp?.trainerId);
+    const syllabi = (db.syllabi || []).filter((s) => s.courseId === grp?.courseId);
+    const evals = (db.evaluations || []).filter((e) => e.studentId === std.id && e.mastered);
+    const ojt = (db.ojts || []).find((o) => o.studentId === std.id);
+    const ojtEmployer = ojt ? (db.employers || []).find((e) => e.id === ojt.employerId) : null;
+    const placement = (db.placements || []).find((p) => p.studentId === std.id);
+    const placementEmployer = placement ? (db.employers || []).find((e) => e.id === placement.employerId) : null;
+
+    return {
+      present,
+      absent,
+      late,
+      rate,
+      masteredCount: evals.length,
+      totalUnits: syllabi.length,
+      syllabi,
+      evals,
+      grp,
+      trainer,
+      ojt,
+      ojtEmployer,
+      placement,
+      placementEmployer
+    };
+  };
+
+  // Helper for Student Fee & Accounts Summary
+  const getStudentFeeSummary = (std) => {
+    const grp = (db.trainingGroups || []).find((g) => g.id === std.groupId);
+    const crs = (db.courses || []).find((c) => c.id === grp?.courseId);
+    const lockedFee = std.lockedCourseFee || crs?.price || 15000;
+    const studentPayments = (db.payments || []).filter((p) => p.studentId === std.id);
+    const totalPaid = studentPayments.reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
+    const due = Math.max(0, lockedFee - totalPaid);
+    const status = due === 0 ? 'Paid' : totalPaid > 0 ? 'Partial' : 'Unpaid';
+    return { lockedFee, totalPaid, due, status };
+  };
+
+  return (
+    <Box sx={{ p: { xs: 1.5, sm: 2.2 }, width: '100%' }}>
+      {/* Slim 1-Row Executive Header Bar */}
+      <Card
+        elevation={0}
+        sx={{
+          py: { xs: 1.25, sm: 1.5 },
+          px: { xs: 1.75, sm: 2.25 },
+          mb: 1.75,
+          borderRadius: 2.5,
+          background: 'linear-gradient(135deg, #0f2e5a 0%, #1e3a8a 100%)',
+          color: '#ffffff',
+          boxShadow: '0 4px 14px rgba(15, 46, 90, 0.16)'
+        }}
+      >
+        <Grid container spacing={1.5} alignItems="center">
+          <Grid item xs={12} md={7}>
+            <Stack direction="row" spacing={1.2} alignItems="center">
+              <Box
+                sx={{
+                  width: 34,
+                  height: 34,
+                  borderRadius: 1.8,
+                  bgcolor: 'rgba(245, 158, 11, 0.16)',
+                  border: '1px solid rgba(245, 158, 11, 0.35)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  flexShrink: 0
+                }}
+              >
+                <SchoolIcon sx={{ fontSize: 20, color: '#fbbf24' }} />
+              </Box>
+              <Box sx={{ minWidth: 0 }}>
+                <Typography
+                  variant="subtitle1"
+                  noWrap
+                  sx={{ fontWeight: 800, color: '#ffffff', fontSize: { xs: '0.96rem', sm: '1.06rem' }, lineHeight: 1.2 }}
+                >
+                  Student Management &amp; Digital Dossier
+                </Typography>
+                <Typography
+                  variant="caption"
+                  noWrap
+                  sx={{ color: '#cbd5e1', display: 'block', fontSize: '0.73rem', mt: 0.15 }}
+                >
+                  Prabidhik School, Jorpati • Digital 360° Profiles, Batch Assignment &amp; Verification QR Cards
+                </Typography>
+              </Box>
+            </Stack>
+          </Grid>
+
+          <Grid item xs={12} md={5} sx={{ textAlign: { xs: 'left', md: 'right' } }}>
+            <Stack direction="row" spacing={1} justifyContent={{ xs: 'flex-start', md: 'flex-end' }} flexWrap="wrap" useFlexGap>
+              <Button
+                variant="outlined"
+                size="small"
+                startIcon={<SwapHorizIcon sx={{ fontSize: '16px !important' }} />}
+                onClick={() => {
+                  setBulkSelectedIds([]);
+                  setBulkTargetGroupId('');
+                  setBulkSearch('');
+                  setBulkSourceGroup(filterGroup !== 'ALL' ? filterGroup : 'ALL');
+                  setOpenBulkTransfer(true);
+                }}
+                sx={{
+                  bgcolor: 'rgba(255, 255, 255, 0.1)',
+                  color: '#ffffff',
+                  borderColor: 'rgba(255, 255, 255, 0.3)',
+                  fontWeight: 700,
+                  fontSize: '0.76rem',
+                  whiteSpace: 'nowrap',
+                  px: 1.4,
+                  py: 0.65,
+                  '&:hover': { bgcolor: 'rgba(255, 255, 255, 0.2)', borderColor: '#ffffff' }
+                }}
+              >
+                Move Group
+              </Button>
+              <Button
+                variant="outlined"
+                size="small"
+                startIcon={<FileDownloadIcon sx={{ fontSize: '15px !important' }} />}
+                onClick={handleExportExcel}
+                sx={{
+                  bgcolor: 'rgba(255, 255, 255, 0.1)',
+                  color: '#ffffff',
+                  borderColor: 'rgba(255, 255, 255, 0.3)',
+                  fontWeight: 700,
+                  fontSize: '0.76rem',
+                  whiteSpace: 'nowrap',
+                  px: 1.4,
+                  py: 0.65,
+                  '&:hover': { bgcolor: 'rgba(255, 255, 255, 0.2)', borderColor: '#ffffff' }
+                }}
+              >
+                Export Excel
+              </Button>
+              <Button
+                variant="contained"
+                size="small"
+                startIcon={<AddIcon sx={{ fontSize: '16px !important' }} />}
+                onClick={handleOpenAdd}
+                sx={{
+                  bgcolor: '#f59e0b',
+                  color: '#0f2e5a',
+                  fontWeight: 800,
+                  fontSize: '0.76rem',
+                  whiteSpace: 'nowrap',
+                  px: 1.4,
+                  py: 0.65,
+                  boxShadow: 'none',
+                  '&:hover': { bgcolor: '#d97706', color: '#ffffff' }
+                }}
+              >
+                + Enroll Student
+              </Button>
+            </Stack>
+          </Grid>
+        </Grid>
+      </Card>
+
+      {/* Compact Filter & Search Bar */}
+      <Card elevation={0} sx={{ p: 1.25, mb: 1.75, borderRadius: 2, border: '1px solid #e2e8f0', bgcolor: '#ffffff' }}>
+        <Grid container spacing={1.25} alignItems="center">
+          <Grid item xs={12} sm={3.5}>
+            <TextField
+              size="small"
+              placeholder="Search by Name, TGID, Phone, ID..."
+              fullWidth
+              value={searchQuery}
+              onChange={(e) => {
+                setSearchQuery(e.target.value);
+                setPage(0);
+              }}
+              InputProps={{
+                startAdornment: (
+                  <InputAdornment position="start">
+                    <SearchIcon sx={{ color: '#647089', fontSize: 18 }} />
+                  </InputAdornment>
+                ),
+                endAdornment: searchQuery ? (
+                  <InputAdornment position="end">
+                    <IconButton size="small" onClick={() => { setSearchQuery(''); setPage(0); }}>
+                      <CloseIcon sx={{ fontSize: 16 }} />
+                    </IconButton>
+                  </InputAdornment>
+                ) : null
+              }}
+            />
+          </Grid>
+          <Grid item xs={12} sm={3}>
+            <TextField
+              select
+              size="small"
+              label="Filter by Training Group"
+              fullWidth
+              value={filterGroup}
+              onChange={(e) => {
+                setFilterGroup(e.target.value);
+                setPage(0);
+              }}
+            >
+              <MenuItem value="ALL">All Training Groups ({myGroups.length})</MenuItem>
+              {myGroups.map((grp) => (
+                <MenuItem key={grp.id} value={grp.id}>
+                  {grp.groupCode} — Shift {grp.shift}
+                </MenuItem>
+              ))}
+            </TextField>
+          </Grid>
+          <Grid item xs={6} sm={2}>
+            <TextField
+              select
+              size="small"
+              label="Status"
+              fullWidth
+              value={statusFilter}
+              onChange={(e) => {
+                setStatusFilter(e.target.value);
+                setPage(0);
+              }}
+            >
+              <MenuItem value="ALL">All Status</MenuItem>
+              <MenuItem value="Active">Active</MenuItem>
+              <MenuItem value="Completed">Completed</MenuItem>
+              <MenuItem value="Dropped">Dropped</MenuItem>
+            </TextField>
+          </Grid>
+          <Grid item xs={6} sm={3.5} sx={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 1 }}>
+            <Chip
+              label={`${filteredStudents.length} Students`}
+              size="small"
+              sx={{ fontWeight: 800, bgcolor: '#f1f5f9', color: '#0f2e5a', display: { xs: 'none', md: 'inline-flex' } }}
+            />
+            <ToggleButtonGroup
+              value={viewMode}
+              exclusive
+              onChange={(e, next) => next && setViewMode(next)}
+              size="small"
+              sx={{ bgcolor: '#fff' }}
+            >
+              <ToggleButton value="table" sx={{ fontWeight: 700, px: 1.2, py: 0.45, fontSize: '0.75rem', whiteSpace: 'nowrap' }}>
+                <ViewListIcon fontSize="small" sx={{ mr: 0.4, fontSize: '1rem' }} /> Table
+              </ToggleButton>
+              <ToggleButton value="card" sx={{ fontWeight: 700, px: 1.2, py: 0.45, fontSize: '0.75rem', whiteSpace: 'nowrap' }}>
+                <ViewModuleIcon fontSize="small" sx={{ mr: 0.4, fontSize: '1rem' }} /> Cards
+              </ToggleButton>
+            </ToggleButtonGroup>
+          </Grid>
+        </Grid>
+      </Card>
+
+      {/* Students Data View (Table or Card) */}
+      {isBelowMd || viewMode === 'table' ? (
+        <Box>
+          <ResponsiveDataView
+            rows={paginatedStudents}
+            keyExtractor={(student) => student.id}
+            enableDesktopCardToggle={true}
+            emptyIcon={<SchoolIcon />}
+            emptyTitle="No students found"
+            emptySubtitle="No students found matching your criteria."
+            renderTable={() => (
+              <Card elevation={0} sx={{ borderRadius: 2, overflow: 'hidden', border: '1px solid #E2E8F0' }}>
+                <TableContainer>
+            <Table size="small">
+              <TableHead
+                sx={{
+                  bgcolor: '#0F2E5A',
+                  '& .MuiTableCell-head': {
+                    bgcolor: '#0F2E5A !important',
+                    color: '#FFFFFF !important',
+                    fontWeight: 800,
+                    fontSize: '0.72rem',
+                    py: 1,
+                    px: 1.25,
+                    borderBottom: '2px solid #F59E0B',
+                    whiteSpace: 'nowrap'
+                  }
+                }}
+              >
+                <TableRow>
+                  <TableCell sx={{ color: '#FFFFFF !important', fontWeight: 800, width: 46, textAlign: 'center' }}>
+                    #
+                  </TableCell>
+                  <TableCell sx={{ color: '#FFFFFF !important', fontWeight: 800 }}>Student</TableCell>
+                  <TableCell sx={{ color: '#FFFFFF !important', fontWeight: 800 }}>Batch &amp; Shift</TableCell>
+                  <TableCell sx={{ color: '#FFFFFF !important', fontWeight: 800 }}>Contact &amp; WhatsApp</TableCell>
+                  <TableCell sx={{ color: '#FFFFFF !important', fontWeight: 800 }}>Fee Status</TableCell>
+                  <TableCell sx={{ color: '#FFFFFF !important', fontWeight: 800 }}>Admission Date</TableCell>
+                  <TableCell sx={{ color: '#FFFFFF !important', fontWeight: 800 }}>Status</TableCell>
+                  <TableCell sx={{ color: '#FFFFFF !important', fontWeight: 800, textAlign: 'right' }}>Actions</TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {filteredStudents.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={8} align="center" sx={{ py: 4, color: '#94a3b8', fontWeight: 600, fontSize: '0.8rem' }}>
+                      No students found matching your criteria.
+                    </TableCell>
+                  </TableRow>
+                ) : (
+                  paginatedStudents.map((std, idx) => {
+                    const grp = (db.trainingGroups || []).find((g) => g.id === std.groupId);
+                    const course = (db.courses || []).find((c) => c.id === grp?.courseId);
+                    const serialNo = page * rowsPerPage + idx + 1;
+
+                    return (
+                      <TableRow key={std.id} hover>
+                        <TableCell sx={{ fontWeight: 700, color: '#64748B', textAlign: 'center', width: 46, fontSize: '0.75rem' }}>
+                          {serialNo}
+                        </TableCell>
+                        <TableCell>
+                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                            <Avatar src={std.photoUrl} sx={{ width: 34, height: 34, bgcolor: '#1a56b0', fontWeight: 800, fontSize: '0.82rem' }}>
+                              {std.name[0]}
+                            </Avatar>
+                            <Box sx={{ minWidth: 0 }}>
+                              <Typography sx={{ fontWeight: 800, fontSize: '0.8rem', lineHeight: 1.2 }}>
+                                {std.name}
+                              </Typography>
+                              <Typography variant="caption" sx={{ color: '#647089', display: 'flex', alignItems: 'center', gap: 0.6, mt: 0.2, flexWrap: 'wrap', fontSize: '0.69rem' }}>
+                                <span>{std.tgid} • {std.gender}</span>
+                                <Chip
+                                  size="small"
+                                  icon={<FingerprintIcon sx={{ fontSize: '11px !important', color: '#0F2E5A !important' }} />}
+                                  label={`#${std.biometricId || 'N/A'}`}
+                                  sx={{ height: 18, fontSize: '0.64rem', fontWeight: 800, bgcolor: '#EEF2F6', color: '#0F2E5A' }}
+                                />
+                              </Typography>
+                            </Box>
+                          </Box>
+                        </TableCell>
+                        <TableCell sx={{ whiteSpace: 'nowrap' }}>
+                          <Chip
+                            label={grp?.groupCode || 'Unassigned'}
+                            size="small"
+                            sx={{ height: 19, fontSize: '0.68rem', fontWeight: 800, bgcolor: '#1a56b0', color: '#fff', mb: 0.3, display: 'block', width: 'fit-content' }}
+                          />
+                          <Typography variant="caption" sx={{ color: '#647089', display: 'block', fontSize: '0.69rem' }}>
+                            {course?.title || ''} (Shift {grp?.shift || ''})
+                          </Typography>
+                        </TableCell>
+                        <TableCell sx={{ whiteSpace: 'nowrap' }}>
+                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                            <Typography sx={{ fontWeight: 700, fontSize: '0.78rem' }}>
+                              {std.phone}
+                            </Typography>
+                            <IconButton
+                              size="small"
+                              onClick={() => openWhatsAppHubForContact({
+                                phone: std.phone,
+                                name: std.name,
+                                role: 'Student',
+                                initialDraft: `Namaste ${std.name}, update from Prabidhik School, Jorpati.`
+                              })}
+                              sx={{ color: '#25D366', p: 0.3 }}
+                            >
+                              <WhatsAppIcon sx={{ fontSize: '1rem' }} />
+                            </IconButton>
+                          </Box>
+                        </TableCell>
+                        <TableCell sx={{ whiteSpace: 'nowrap' }}>
+                          {(() => {
+                            const fee = getStudentFeeSummary(std);
+                            const isPaid = fee.status === 'Paid';
+                            const isPartial = fee.status === 'Partial';
+                            return (
+                              <Box>
+                                <Chip
+                                  label={fee.status}
+                                  size="small"
+                                  sx={{
+                                    height: 19,
+                                    fontSize: '0.67rem',
+                                    fontWeight: 800,
+                                    bgcolor: isPaid ? '#e5f8ee' : isPartial ? '#fef3c7' : '#fee2e2',
+                                    color: isPaid ? '#16834b' : isPartial ? '#b45309' : '#dc2626',
+                                    mb: 0.2
+                                  }}
+                                />
+                                <Typography variant="caption" sx={{ display: 'block', color: fee.due > 0 ? '#dc2626' : '#16834b', fontWeight: 700, fontSize: '0.68rem' }}>
+                                  {fee.due > 0 ? `Due: Rs. ${fee.due.toLocaleString()}` : `Paid in Full`}
+                                </Typography>
+                              </Box>
+                            );
+                          })()}
+                        </TableCell>
+                        <TableCell sx={{ fontWeight: 600, fontSize: '0.77rem', whiteSpace: 'nowrap' }}>
+                          {std.admissionDate}
+                        </TableCell>
+                        <TableCell sx={{ whiteSpace: 'nowrap' }}>
+                          <Chip
+                            label={std.status}
+                            size="small"
+                            sx={{
+                              height: 20,
+                              fontSize: '0.68rem',
+                              bgcolor: std.status === 'Active' ? '#e5f8ee' : '#fdeceb',
+                              color: std.status === 'Active' ? '#16834b' : '#d5372f',
+                              fontWeight: 700
+                            }}
+                          />
+                        </TableCell>
+                        <TableCell sx={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+                          <Stack direction="row" spacing={0.5} justifyContent="flex-end" alignItems="center">
+                            <Tooltip title="View 360° Profile Dossier">
+                              <Button
+                                size="small"
+                                startIcon={<VisibilityIcon sx={{ fontSize: '13px !important' }} />}
+                                onClick={() => setProfileStudent(std)}
+                                sx={{
+                                  px: 0.9,
+                                  py: 0.3,
+                                  minWidth: 0,
+                                  fontSize: '0.7rem',
+                                  fontWeight: 700,
+                                  whiteSpace: 'nowrap',
+                                  color: '#1a56b0',
+                                  bgcolor: '#eff6ff',
+                                  border: '1px solid #bfdbfe',
+                                  '&:hover': { bgcolor: '#dbeafe' }
+                                }}
+                              >
+                                Profile
+                              </Button>
+                            </Tooltip>
+                            <Tooltip title="Generate Digital QR ID Card">
+                              <Button
+                                size="small"
+                                startIcon={<QrCode2Icon sx={{ fontSize: '13px !important' }} />}
+                                onClick={() => setIdCardStudent(std)}
+                                sx={{
+                                  px: 0.9,
+                                  py: 0.3,
+                                  minWidth: 0,
+                                  fontSize: '0.7rem',
+                                  fontWeight: 700,
+                                  whiteSpace: 'nowrap',
+                                  color: '#6c3fc9',
+                                  bgcolor: '#f5f3ff',
+                                  border: '1px solid #ddd6fe',
+                                  '&:hover': { bgcolor: '#ede9fe' }
+                                }}
+                              >
+                                ID
+                              </Button>
+                            </Tooltip>
+                            <IconButton size="small" onClick={() => handleOpenEdit(std)} sx={{ color: '#1a56b0', p: 0.35 }}>
+                              <EditIcon sx={{ fontSize: '1.05rem' }} />
+                            </IconButton>
+                            <IconButton size="small" onClick={() => handleDelete(std.id)} sx={{ color: '#d5372f', p: 0.35 }}>
+                              <DeleteOutlineIcon sx={{ fontSize: '1.05rem' }} />
+                            </IconButton>
+                          </Stack>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  }))}
+              </TableBody>
+            </Table>
+          </TableContainer>
+          <TablePagination
+            rowsPerPageOptions={[10, 25, 50, 100]}
+            component="div"
+            count={filteredStudents.length}
+            rowsPerPage={rowsPerPage}
+            page={page}
+            onPageChange={(e, newPage) => setPage(newPage)}
+            onRowsPerPageChange={(e) => {
+              setRowsPerPage(parseInt(e.target.value, 10));
+              setPage(0);
+            }}
+                sx={{
+                  borderTop: '1px solid #E2E8F0',
+                  bgcolor: '#F8FAFC'
+                }}
+              />
+            </Card>
+            )}
+            renderCard={(student) => {
+              const grp = (db.trainingGroups || []).find((g) => g.id === student.groupId);
+              const course = (db.courses || []).find((c) => c.id === grp?.courseId);
+              const fee = getStudentFeeSummary(student);
+              const statusLabel = student.status || 'Active';
+              const statusTone =
+                statusLabel === 'Active'
+                  ? 'success'
+                  : statusLabel === 'Completed'
+                  ? 'info'
+                  : statusLabel === 'Dropped'
+                  ? 'error'
+                  : 'neutral';
+              const accentColor =
+                statusLabel === 'Completed'
+                  ? '#0284C7'
+                  : statusLabel === 'Dropped'
+                  ? '#DC2626'
+                  : '#059669';
+              const initials = (student.name || 'S')
+                .trim()
+                .split(/\s+/)
+                .map((p) => p[0])
+                .slice(0, 2)
+                .join('')
+                .toUpperCase();
+              const paidPct =
+                fee.lockedFee > 0
+                  ? Math.min(100, Math.round((fee.totalPaid / fee.lockedFee) * 100))
+                  : 100;
+
+              return (
+                <EntityCard
+                  accentColor={accentColor}
+                  avatarSrc={student.photo || student.photoUrl}
+                  avatarText={initials}
+                  title={student.name}
+                  code={student.tgid || (student.biometricId ? `#${student.biometricId}` : undefined)}
+                  subtitle={course?.title || 'Vocational Training'}
+                  status={{ label: statusLabel, tone: statusTone, showDot: true }}
+                  onCardClick={() => setProfileStudent(student)}
+                  fields={[
+                    {
+                      label: 'Batch / Group',
+                      value: `${grp?.groupCode || 'Unassigned'}${grp?.shift ? ` • ${grp.shift}` : ''}`,
+                      color: '#1E40AF'
+                    },
+                    {
+                      label: 'Phone',
+                      value: student.phone || 'N/A'
+                    },
+                    {
+                      label: 'Total Fee',
+                      value: `Rs. ${fee.lockedFee.toLocaleString()}`
+                    },
+                    {
+                      label: 'Due Amount',
+                      value: fee.due > 0 ? `Rs. ${fee.due.toLocaleString()}` : 'Rs. 0 (Paid)',
+                      color: fee.due > 0 ? '#DC2626' : '#059669'
+                    }
+                  ]}
+                  progress={{
+                    label: 'Fee Paid',
+                    percent: paidPct,
+                    text: `${paidPct}%`,
+                    color: paidPct >= 100 ? '#059669' : '#0F2C59'
+                  }}
+                  actions={[
+                    {
+                      label: 'View Profile',
+                      icon: <VisibilityIcon sx={{ fontSize: '1.05rem' }} />,
+                      onClick: () => setProfileStudent(student),
+                      color: '#1a56b0',
+                      bgColor: '#EFF6FF'
+                    },
+                    {
+                      label: 'Payment Timeline',
+                      icon: <TimelineIcon sx={{ fontSize: '1.05rem' }} />,
+                      onClick: () => setTimelineStudent(student),
+                      color: '#0F766E',
+                      bgColor: '#F0FDFA'
+                    },
+                    {
+                      label: 'ID Card',
+                      icon: <QrCode2Icon sx={{ fontSize: '1.05rem' }} />,
+                      onClick: () => setIdCardStudent(student),
+                      color: '#6C3FC9',
+                      bgColor: '#F5F3FF'
+                    },
+                    {
+                      label: 'Call',
+                      icon: <CallIcon sx={{ fontSize: '1.05rem' }} />,
+                      href: student.phone ? `tel:${student.phone}` : undefined,
+                      disabled: !student.phone,
+                      color: '#0369A1',
+                      bgColor: '#F0F9FF'
+                    },
+                    {
+                      label: 'WhatsApp',
+                      icon: <WhatsAppIcon sx={{ fontSize: '1.05rem' }} />,
+                      onClick: () => openWhatsAppHubForContact({
+                        phone: student.phone,
+                        name: student.name,
+                        role: 'Student',
+                        initialDraft: `Namaste ${student.name}, update from Prabidhik School, Jorpati.`
+                      }),
+                      disabled: !student.phone,
+                      color: '#15803D',
+                      bgColor: '#F0FDF4'
+                    },
+                    {
+                      label: 'Edit',
+                      icon: <EditIcon sx={{ fontSize: '1.05rem' }} />,
+                      onClick: () => handleOpenEdit(student),
+                      color: '#D97706',
+                      bgColor: '#FFFBEB'
+                    }
+                  ]}
+                />
+              );
+            }}
+          />
+          {isBelowMd && filteredStudents.length > 0 && (
+            <Card sx={{ mt: 1.5, borderRadius: 2.5, border: '1px solid #E2E8F0', bgcolor: '#fff', overflow: 'hidden' }}>
+              <TablePagination
+                rowsPerPageOptions={[10, 25, 50, 100]}
+                component="div"
+                count={filteredStudents.length}
+                rowsPerPage={rowsPerPage}
+                page={page}
+                onPageChange={(e, newPage) => setPage(newPage)}
+                onRowsPerPageChange={(e) => {
+                  setRowsPerPage(parseInt(e.target.value, 10));
+                  setPage(0);
+                }}
+                sx={{ bgcolor: '#F8FAFC' }}
+              />
+            </Card>
+          )}
+        </Box>
+      ) : (
+        /* Card View */
+        <Box>
+          <Grid container spacing={2}>
+            {filteredStudents.length === 0 ? (
+              <Grid item xs={12}>
+                <Paper sx={{ p: 6, textAlign: 'center', color: '#94a3b8', borderRadius: 3 }}>
+                  No students found matching your criteria.
+                </Paper>
+              </Grid>
+            ) : (
+              paginatedStudents.map((std, idx) => {
+                const grp = (db.trainingGroups || []).find((g) => g.id === std.groupId);
+                const course = (db.courses || []).find((c) => c.id === grp?.courseId);
+                const serialNo = page * rowsPerPage + idx + 1;
+
+                return (
+                  <Grid item xs={12} sm={6} md={4} key={std.id}>
+                <Card
+                  sx={{
+                    p: 2.2,
+                    borderRadius: 3,
+                    border: '1px solid #e2e8f0',
+                    boxShadow: '0 3px 12px rgba(0,0,0,0.04)',
+                    height: '100%',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    justifyContent: 'space-between',
+                    transition: 'all 0.2s',
+                    '&:hover': {
+                      boxShadow: '0 8px 24px rgba(0,0,0,0.08)',
+                      borderColor: '#cbd5e1'
+                    }
+                  }}
+                >
+                  <Box>
+                    <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1.5 }}>
+                      <Chip label={`S.N. ${serialNo}`} size="small" sx={{ bgcolor: '#f1f5f9', fontWeight: 900, color: '#475569' }} />
+                      <Chip
+                        label={std.status}
+                        size="small"
+                        sx={{
+                          bgcolor: std.status === 'Active' ? '#e5f8ee' : '#fdeceb',
+                          color: std.status === 'Active' ? '#16834b' : '#d5372f',
+                          fontWeight: 700
+                        }}
+                      />
+                    </Box>
+
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 1.5 }}>
+                      <Avatar src={std.photoUrl} sx={{ width: 48, height: 48, bgcolor: '#1a56b0', fontWeight: 800 }}>
+                        {std.name[0]}
+                      </Avatar>
+                      <Box>
+                        <Typography variant="subtitle1" sx={{ fontWeight: 800, lineHeight: 1.2 }}>
+                          {std.name}
+                        </Typography>
+                        <Typography variant="caption" sx={{ color: '#647089', display: 'flex', alignItems: 'center', gap: 0.8, mt: 0.3, flexWrap: 'wrap' }}>
+                          <span>{std.tgid} • {std.gender}</span>
+                          <Chip
+                            size="small"
+                            icon={<FingerprintIcon sx={{ fontSize: '12px !important', color: '#0F2E5A !important' }} />}
+                            label={`Machine ID: #${std.biometricId || 'N/A'}`}
+                            sx={{ height: 19, fontSize: '0.68rem', fontWeight: 800, bgcolor: '#EEF2F6', color: '#0F2E5A' }}
+                          />
+                        </Typography>
+                      </Box>
+                    </Box>
+
+                    <Paper variant="outlined" sx={{ p: 1.2, borderRadius: 2, bgcolor: '#f8fafc', mb: 1.5 }}>
+                      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 0.5 }}>
+                        <Typography variant="caption" sx={{ color: '#1a56b0', fontWeight: 800, display: 'block' }}>
+                          Group {grp?.groupCode || 'Unassigned'} • Shift {grp?.shift || ''}
+                        </Typography>
+                        {(() => {
+                          const fee = getStudentFeeSummary(std);
+                          const isPaid = fee.status === 'Paid';
+                          const isPartial = fee.status === 'Partial';
+                          return (
+                            <Chip
+                              label={fee.status}
+                              size="small"
+                              sx={{
+                                height: 20,
+                                fontSize: '0.68rem',
+                                fontWeight: 800,
+                                bgcolor: isPaid ? '#e5f8ee' : isPartial ? '#fef3c7' : '#fee2e2',
+                                color: isPaid ? '#16834b' : isPartial ? '#b45309' : '#dc2626'
+                              }}
+                            />
+                          );
+                        })()}
+                      </Box>
+                      <Typography variant="body2" sx={{ fontWeight: 700, fontSize: '0.85rem' }}>
+                        {course?.title || 'Vocational Training'}
+                      </Typography>
+                      <Typography variant="caption" sx={{ color: '#647089', display: 'block', mt: 0.3 }}>
+                        Phone: {std.phone} • Admitted: {std.admissionDate}
+                      </Typography>
+                    </Paper>
+                  </Box>
+
+                  <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', pt: 1, borderTop: '1px solid #f1f5f9' }}>
+                    <Button
+                      size="small"
+                      startIcon={<VisibilityIcon />}
+                      onClick={() => setProfileStudent(std)}
+                      sx={{ fontWeight: 800, textTransform: 'none' }}
+                    >
+                      360° Profile
+                    </Button>
+                    <Box sx={{ display: 'flex', gap: 0.5 }}>
+                      <Tooltip title="Digital QR ID Card">
+                        <IconButton size="small" onClick={() => setIdCardStudent(std)} sx={{ color: '#6c3fc9' }}>
+                          <QrCode2Icon fontSize="small" />
+                        </IconButton>
+                      </Tooltip>
+                      <IconButton size="small" onClick={() => handleOpenEdit(std)} sx={{ color: '#1a56b0' }}>
+                        <EditIcon fontSize="small" />
+                      </IconButton>
+                      <IconButton size="small" onClick={() => handleDelete(std.id)} sx={{ color: '#d5372f' }}>
+                        <DeleteOutlineIcon fontSize="small" />
+                      </IconButton>
+                    </Box>
+                  </Box>
+                </Card>
+              </Grid>
+            );
+          }))}
+        </Grid>
+        {filteredStudents.length > 0 && (
+          <Card sx={{ mt: 2.5, borderRadius: 2.5, border: '1px solid #e2e8f0', bgcolor: '#fff', overflow: 'hidden' }}>
+            <TablePagination
+              rowsPerPageOptions={[10, 25, 50, 100]}
+              component="div"
+              count={filteredStudents.length}
+              rowsPerPage={rowsPerPage}
+              page={page}
+              onPageChange={(e, newPage) => setPage(newPage)}
+              onRowsPerPageChange={(e) => {
+                setRowsPerPage(parseInt(e.target.value, 10));
+                setPage(0);
+              }}
+              sx={{
+                bgcolor: '#F8FAFC'
+              }}
+            />
+          </Card>
+        )}
+      </Box>
+    )}
+
+      {/* Enroll / Edit Student Dialog */}
+      <Dialog
+        open={openAddDialog}
+        onClose={() => setOpenAddDialog(false)}
+        maxWidth="md"
+        fullWidth
+        fullScreen={isMobile}
+        BackdropProps={{
+          sx: { backdropFilter: 'blur(5px)', bgcolor: 'rgba(15, 23, 42, 0.5)' }
+        }}
+        PaperProps={{
+          sx: {
+            borderRadius: isMobile ? 0 : 3.5,
+            overflow: 'hidden',
+            boxShadow: '0 25px 60px -15px rgba(15, 23, 42, 0.35)',
+            border: '1px solid rgba(226, 232, 240, 0.8)'
+          }
+        }}
+      >
+        <DialogTitle
+          sx={{
+            p: { xs: 2, sm: 2.5 },
+            background: 'linear-gradient(135deg, #0F2C59 0%, #1E3A8A 100%)',
+            color: '#FFFFFF',
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            borderBottom: '3px solid #F59E0B'
+          }}
+        >
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+            <Avatar sx={{ bgcolor: 'rgba(255, 255, 255, 0.15)', color: '#FFFFFF', width: 44, height: 44, borderRadius: 2.5, border: '1px solid rgba(255, 255, 255, 0.25)' }}>
+              <PersonAddAlt1Icon />
+            </Avatar>
+            <Box>
+              <Typography variant="h6" sx={{ fontWeight: 900, fontSize: '1.05rem', lineHeight: 1.2, color: '#FFFFFF' }}>
+                {editingItem ? 'Edit Student Details' : 'Enroll New Student'}
+              </Typography>
+              <Typography variant="caption" sx={{ color: 'rgba(255, 255, 255, 0.8)', fontSize: '0.74rem' }}>
+                {editingItem ? 'Update trainee personal and academic information' : 'Fill in student details and training group assignment'}
+              </Typography>
+            </Box>
+          </Box>
+          <IconButton
+            size="small"
+            aria-label="Close student dialog"
+            onClick={() => setOpenAddDialog(false)}
+            sx={{
+              color: 'rgba(255, 255, 255, 0.85)',
+              bgcolor: 'rgba(255, 255, 255, 0.1)',
+              '&:hover': { bgcolor: 'rgba(255, 255, 255, 0.25)', color: '#FFFFFF' }
+            }}
+          >
+            <CloseIcon fontSize="small" />
+          </IconButton>
+        </DialogTitle>
+
+        <DialogContent
+          dividers
+          sx={{
+            p: { xs: 2, sm: 2.5 },
+            bgcolor: '#F8FAFC',
+            '&::-webkit-scrollbar': { width: 6 },
+            '&::-webkit-scrollbar-track': { background: '#F1F5F9' },
+            '&::-webkit-scrollbar-thumb': { background: '#CBD5E1', borderRadius: 3 }
+          }}
+        >
+          <Stack spacing={2}>
+            {/* Section 1: Batch & Identity */}
+            <Paper elevation={0} sx={{ p: { xs: 1.5, sm: 2 }, borderRadius: 2, border: '1px solid #E2E8F0', bgcolor: '#FFFFFF' }}>
+              <Typography variant="subtitle2" sx={{ fontWeight: 800, color: '#0F2E5A', mb: 1.8, display: 'flex', alignItems: 'center', gap: 1 }}>
+                <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: '#0F2E5A' }} />
+                1. Batch Assignment & Identity
+              </Typography>
+
+              <Grid container spacing={2}>
+                <Grid item xs={12} sm={3.5}>
+                  <TextField
+                    label="Student TGID"
+                    fullWidth
+                    size="small"
+                    placeholder="e.g. TGID-105"
+                    value={formData.tgid}
+                    onChange={(e) => setFormData({ ...formData, tgid: e.target.value })}
+                    required
+                  />
+                </Grid>
+                <Grid item xs={12} sm={3.5}>
+                  <TextField
+                    label="Biometric Machine ID"
+                    fullWidth
+                    size="small"
+                    placeholder="e.g. 1005"
+                    value={formData.biometricId || ''}
+                    onChange={(e) => setFormData({ ...formData, biometricId: e.target.value })}
+                    InputProps={{
+                      startAdornment: (
+                        <InputAdornment position="start">
+                          <FingerprintIcon sx={{ fontSize: 18, color: '#0F2E5A' }} />
+                        </InputAdornment>
+                      )
+                    }}
+                    helperText="User ID registered on ZKTeco / Biometric device"
+                  />
+                </Grid>
+                <Grid item xs={12} sm={5}>
+                  <TextField
+                    label="Full Name"
+                    fullWidth
+                    size="small"
+                    placeholder="e.g. Sita Sharma"
+                    value={formData.name}
+                    onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                    required
+                  />
+                </Grid>
+
+                <Grid item xs={12}>
+                  <TextField
+                    select
+                    label="Assign to Training Group (Class & Shift)"
+                    fullWidth
+                    size="small"
+                    value={formData.groupId}
+                    onChange={(e) => handleGroupSelect(e.target.value)}
+                    helperText="Selecting a group links the trainee to course curriculum, trainer, and shift."
+                    required
+                  >
+                    <MenuItem value="" sx={{ color: '#94A3B8', fontStyle: 'italic' }}>
+                      -- Select Training Group --
+                    </MenuItem>
+                    {myGroups.map((grp) => {
+                      const crs = (db.courses || []).find((c) => c.id === grp.courseId);
+                      return (
+                        <MenuItem key={grp.id} value={grp.id}>
+                          {grp.groupCode} — {crs?.title} (Shift {grp.shift}: {grp.startTime} – {grp.endTime})
+                        </MenuItem>
+                      );
+                    })}
+                  </TextField>
+                </Grid>
+              </Grid>
+            </Paper>
+
+            {/* Section 2: Contact & Demographics */}
+            <Paper elevation={0} sx={{ p: { xs: 1.5, sm: 2 }, borderRadius: 2, border: '1px solid #E2E8F0', bgcolor: '#FFFFFF' }}>
+              <Typography variant="subtitle2" sx={{ fontWeight: 800, color: '#0F2E5A', mb: 1.8, display: 'flex', alignItems: 'center', gap: 1 }}>
+                <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: '#2563EB' }} />
+                2. Contact & Demographics
+              </Typography>
+
+              <Grid container spacing={2}>
+                <Grid item xs={12} sm={6}>
+                  <TextField
+                    label="Primary Mobile (WhatsApp Enabled)"
+                    fullWidth
+                    size="small"
+                    placeholder="98XXXXXXXX"
+                    value={formData.phone}
+                    onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
+                    required
+                  />
+                </Grid>
+                <Grid item xs={12} sm={6}>
+                  <TextField
+                    label="Secondary Phone / Guardian Contact"
+                    fullWidth
+                    size="small"
+                    placeholder="98XXXXXXXX"
+                    value={formData.secondaryPhone}
+                    onChange={(e) => setFormData({ ...formData, secondaryPhone: e.target.value })}
+                  />
+                </Grid>
+
+                <Grid item xs={12} sm={4}>
+                  <TextField
+                    select
+                    label="Gender"
+                    fullWidth
+                    size="small"
+                    value={formData.gender}
+                    onChange={(e) => setFormData({ ...formData, gender: e.target.value })}
+                  >
+                    <MenuItem value="" sx={{ color: '#94A3B8', fontStyle: 'italic' }}>
+                      -- Select Gender --
+                    </MenuItem>
+                    <MenuItem value="Female">Female</MenuItem>
+                    <MenuItem value="Male">Male</MenuItem>
+                    <MenuItem value="Other">Other</MenuItem>
+                  </TextField>
+                </Grid>
+                <Grid item xs={12} sm={4}>
+                  <TextField
+                    type="date"
+                    label="Date of Birth"
+                    fullWidth
+                    size="small"
+                    InputLabelProps={{ shrink: true }}
+                    value={formData.dateOfBirth}
+                    onChange={(e) => setFormData({ ...formData, dateOfBirth: e.target.value })}
+                  />
+                </Grid>
+                <Grid item xs={12} sm={4}>
+                  <TextField
+                    label="Citizenship Number"
+                    fullWidth
+                    size="small"
+                    placeholder="e.g. 27-01-75-XXXXX"
+                    value={formData.citizenshipNumber}
+                    onChange={(e) => setFormData({ ...formData, citizenshipNumber: e.target.value })}
+                  />
+                </Grid>
+              </Grid>
+            </Paper>
+
+            {/* Section 3: Address & Family */}
+            <Paper elevation={0} sx={{ p: { xs: 1.5, sm: 2 }, borderRadius: 2, border: '1px solid #E2E8F0', bgcolor: '#FFFFFF' }}>
+              <Typography variant="subtitle2" sx={{ fontWeight: 800, color: '#0F2E5A', mb: 1.8, display: 'flex', alignItems: 'center', gap: 1 }}>
+                <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: '#059669' }} />
+                3. Address & Family
+              </Typography>
+
+              <Grid container spacing={2}>
+                <Grid item xs={12} sm={6}>
+                  <TextField
+                    label="Permanent Address"
+                    fullWidth
+                    size="small"
+                    placeholder="e.g. Pokhara-8, Kaski"
+                    value={formData.permanentAddress}
+                    onChange={(e) => setFormData({ ...formData, permanentAddress: e.target.value })}
+                  />
+                </Grid>
+                <Grid item xs={12} sm={6}>
+                  <TextField
+                    label="Current Address"
+                    fullWidth
+                    size="small"
+                    placeholder="e.g. Koteshwor, Kathmandu"
+                    value={formData.currentAddress}
+                    onChange={(e) => setFormData({ ...formData, currentAddress: e.target.value })}
+                  />
+                </Grid>
+                <Grid item xs={12} sm={6}>
+                  <TextField
+                    label="Father Name"
+                    fullWidth
+                    size="small"
+                    placeholder="Father's Name"
+                    value={formData.fatherName}
+                    onChange={(e) => setFormData({ ...formData, fatherName: e.target.value })}
+                  />
+                </Grid>
+                <Grid item xs={12} sm={6}>
+                  <TextField
+                    label="Mother Name"
+                    fullWidth
+                    size="small"
+                    placeholder="Mother's Name"
+                    value={formData.motherName}
+                    onChange={(e) => setFormData({ ...formData, motherName: e.target.value })}
+                  />
+                </Grid>
+              </Grid>
+            </Paper>
+
+            {/* Section 4: Admission & Status */}
+            <Paper elevation={0} sx={{ p: { xs: 1.5, sm: 2 }, borderRadius: 2, border: '1px solid #E2E8F0', bgcolor: '#FFFFFF' }}>
+              <Typography variant="subtitle2" sx={{ fontWeight: 800, color: '#0F2E5A', mb: 1.8, display: 'flex', alignItems: 'center', gap: 1 }}>
+                <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: '#D97706' }} />
+                4. Admission & Status
+              </Typography>
+
+              <Grid container spacing={2}>
+                <Grid item xs={12} sm={4}>
+                  <TextField
+                    type="date"
+                    label="Admission Date"
+                    fullWidth
+                    size="small"
+                    InputLabelProps={{ shrink: true }}
+                    value={formData.admissionDate}
+                    onChange={(e) => setFormData({ ...formData, admissionDate: e.target.value })}
+                  />
+                </Grid>
+                <Grid item xs={12} sm={4}>
+                  <TextField
+                    select
+                    label="Status"
+                    fullWidth
+                    size="small"
+                    value={formData.status}
+                    onChange={(e) => setFormData({ ...formData, status: e.target.value })}
+                  >
+                    <MenuItem value="Active">Active</MenuItem>
+                    <MenuItem value="Completed">Completed</MenuItem>
+                    <MenuItem value="OJT">OJT Phase</MenuItem>
+                    <MenuItem value="Placed">Placed</MenuItem>
+                    <MenuItem value="Dropout">Dropout</MenuItem>
+                  </TextField>
+                </Grid>
+                <Grid item xs={12} sm={4}>
+                  <TextField
+                    label="Photo URL (Optional)"
+                    fullWidth
+                    size="small"
+                    placeholder="https://example.com/photo.jpg"
+                    value={formData.photoUrl}
+                    onChange={(e) => setFormData({ ...formData, photoUrl: e.target.value })}
+                  />
+                </Grid>
+              </Grid>
+            </Paper>
+          </Stack>
+        </DialogContent>
+        <DialogActions
+          sx={{
+            position: 'sticky',
+            bottom: 0,
+            zIndex: 2,
+            px: { xs: 2, sm: 2.5 },
+            pt: { xs: 1.5, sm: 2 },
+            pb: { xs: 'calc(12px + env(safe-area-inset-bottom))', sm: 2.5 },
+            bgcolor: '#F8FAFC',
+            borderTop: '1px solid #E2E8F0',
+            display: 'flex',
+            justifyContent: 'flex-end',
+            gap: 1.5
+          }}
+        >
+          <Button
+            onClick={() => setOpenAddDialog(false)}
+            sx={{
+              fontWeight: 700,
+              color: '#64748B',
+              border: '1px solid #CBD5E1',
+              borderRadius: 2,
+              px: 2.5,
+              py: 0.8,
+              textTransform: 'none',
+              bgcolor: '#FFFFFF',
+              '&:hover': { bgcolor: '#F1F5F9', color: '#0F2E5A', borderColor: '#94A3B8' }
+            }}
+          >
+            Cancel
+          </Button>
+          <Button
+            variant="contained"
+            startIcon={<CheckCircleIcon />}
+            onClick={handleSave}
+            sx={{
+              fontWeight: 800,
+              background: 'linear-gradient(135deg, #0F2E5A 0%, #1E40AF 100%)',
+              color: '#FFFFFF',
+              borderRadius: 2,
+              px: 3,
+              py: 0.8,
+              boxShadow: '0 4px 14px rgba(15, 46, 90, 0.3)',
+              textTransform: 'none',
+              '&:hover': {
+                background: 'linear-gradient(135deg, #0A1E3B 0%, #0F2E5A 100%)',
+                boxShadow: '0 6px 18px rgba(15, 46, 90, 0.4)'
+              }
+            }}
+          >
+            Save Student
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* 360° Student Profile Modal (Customized per User Design) */}
+      <StudentProfileModal
+        open={Boolean(profileStudent)}
+        student={profileStudent}
+        db={db}
+        setDb={setDb}
+        onClose={() => setProfileStudent(null)}
+        onEditStudent={(s) => {
+          handleOpenEdit(s);
+        }}
+        onOpenIdCard={(s) => {
+          setIdCardStudent(s);
+        }}
+      />
+
+      {/* Official Epson L8050 Printable Student ID Card Modal */}
+      {idCardStudent && (
+        <StudentIdCardModal
+          open={Boolean(idCardStudent)}
+          onClose={() => setIdCardStudent(null)}
+          student={idCardStudent}
+          admission={(db.admissions || []).find((a) => a.studentId === idCardStudent.id || a.tgid === idCardStudent.tgid)}
+        />
+      )}
+
+      {/* Direct Payment Timeline Modal (from Mobile Card View) */}
+      {timelineStudent && (() => {
+        const grp = (db.trainingGroups || []).find((g) => g.id === timelineStudent.groupId);
+        const course = (db.courses || []).find((c) => c.id === grp?.courseId);
+        const fee = getStudentFeeSummary(timelineStudent);
+        return (
+          <StudentPaymentTimelineModal
+            open={Boolean(timelineStudent)}
+            onClose={() => setTimelineStudent(null)}
+            student={timelineStudent}
+            ledger={{
+              courseTitle: course?.title || 'Vocational Training',
+              groupCode: grp?.groupCode || grp?.name || 'Batch',
+              lockedFee: fee.lockedFee,
+              netFee: fee.lockedFee,
+              discountAmount: timelineStudent.discountAmount || 0,
+              totalPaid: fee.totalPaid,
+              due: fee.due,
+              dueDateStr: timelineStudent.expectedEndDate || '2025-12-31',
+              paymentStatus: fee.status
+            }}
+            payments={db.payments || []}
+            onCollectDue={() => {
+              const target = timelineStudent;
+              setTimelineStudent(null);
+              setProfileStudent(target);
+            }}
+          />
+        );
+      })()}
+
+      {/* Bulk Move Students to Another Training Group Dialog */}
+      <Dialog
+        open={openBulkTransfer}
+        onClose={() => setOpenBulkTransfer(false)}
+        maxWidth="sm"
+        fullWidth
+        fullScreen={isMobile}
+        PaperProps={{ sx: { borderRadius: isMobile ? 0 : 2.5 } }}
+      >
+        <DialogTitle sx={{ bgcolor: '#0F2E5A', color: '#FFFFFF', py: 1.5, px: 2.2, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <Stack direction="row" spacing={1} alignItems="center">
+            <SwapHorizIcon sx={{ color: '#FBBF24' }} />
+            <Box>
+              <Typography variant="subtitle1" sx={{ fontWeight: 800, lineHeight: 1.2 }}>
+                Bulk Move Students to Training Group
+              </Typography>
+              <Typography variant="caption" sx={{ color: '#CBD5E1', display: 'block' }}>
+                Select multiple students and transfer them to another batch in one click
+              </Typography>
+            </Box>
+          </Stack>
+          <IconButton size="small" onClick={() => setOpenBulkTransfer(false)} sx={{ color: '#FFFFFF' }}>
+            <CloseIcon fontSize="small" />
+          </IconButton>
+        </DialogTitle>
+        <DialogContent sx={{ p: 2.2, bgcolor: '#F8FAFC' }}>
+          <Stack spacing={1.8} sx={{ mt: 0.5 }}>
+            <TextField
+              select
+              fullWidth
+              size="small"
+              label="Destination Training Group *"
+              value={bulkTargetGroupId}
+              onChange={(e) => setBulkTargetGroupId(e.target.value)}
+              helperText={myGroups.length <= 1 ? 'Add another Training Group in Training Groups menu first.' : 'Selected students will be moved to this group.'}
+              sx={{ bgcolor: '#FFFFFF' }}
+            >
+              <MenuItem value="">-- Select Destination Group --</MenuItem>
+              {myGroups.map((grp) => {
+                const crs = (db.courses || []).find((c) => c.id === grp.courseId);
+                return (
+                  <MenuItem key={grp.id} value={grp.id}>
+                    {grp.groupCode} — {crs?.title || 'Course'} (Shift {grp.shift || 'A'})
+                  </MenuItem>
+                );
+              })}
+            </TextField>
+
+            <Grid container spacing={1.2}>
+              <Grid item xs={12} sm={6}>
+                <TextField
+                  select
+                  fullWidth
+                  size="small"
+                  label="Filter Current Group"
+                  value={bulkSourceGroup}
+                  onChange={(e) => setBulkSourceGroup(e.target.value)}
+                  sx={{ bgcolor: '#FFFFFF' }}
+                >
+                  <MenuItem value="ALL">All Groups</MenuItem>
+                  {myGroups.map((grp) => (
+                    <MenuItem key={grp.id} value={grp.id}>
+                      {grp.groupCode}
+                    </MenuItem>
+                  ))}
+                </TextField>
+              </Grid>
+              <Grid item xs={12} sm={6}>
+                <TextField
+                  fullWidth
+                  size="small"
+                  placeholder="Search student name / TGID..."
+                  value={bulkSearch}
+                  onChange={(e) => setBulkSearch(e.target.value)}
+                  sx={{ bgcolor: '#FFFFFF' }}
+                />
+              </Grid>
+            </Grid>
+
+            {(() => {
+              const q = bulkSearch.toLowerCase().trim();
+              const candidates = (db.students || []).filter((s) => {
+                if (isTrainer && !myGroups.some((g) => g.id === s.groupId)) return false;
+                if (bulkSourceGroup !== 'ALL' && s.groupId !== bulkSourceGroup) return false;
+                if (q && !(s.name || '').toLowerCase().includes(q) && !(s.tgid || '').toLowerCase().includes(q) && !(s.phone || '').includes(q)) {
+                  return false;
+                }
+                return true;
+              });
+              const allVisibleSelected = candidates.length > 0 && candidates.every((c) => bulkSelectedIds.includes(c.id));
+              return (
+                <Paper elevation={0} sx={{ border: '1px solid #E2E8F0', borderRadius: 2, overflow: 'hidden', bgcolor: '#FFFFFF' }}>
+                  <Box sx={{ px: 1.5, py: 0.9, bgcolor: '#F1F5F9', borderBottom: '1px solid #E2E8F0', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <Stack direction="row" alignItems="center" spacing={0.5}>
+                      <Checkbox
+                        size="small"
+                        checked={allVisibleSelected}
+                        indeterminate={!allVisibleSelected && candidates.some((c) => bulkSelectedIds.includes(c.id))}
+                        onChange={(e) => {
+                          if (e.target.checked) {
+                            setBulkSelectedIds(Array.from(new Set([...bulkSelectedIds, ...candidates.map((c) => c.id)])));
+                          } else {
+                            const visibleSet = new Set(candidates.map((c) => c.id));
+                            setBulkSelectedIds(bulkSelectedIds.filter((id) => !visibleSet.has(id)));
+                          }
+                        }}
+                      />
+                      <Typography variant="caption" sx={{ fontWeight: 700, color: '#334155' }}>
+                        Select All Visible ({candidates.length})
+                      </Typography>
+                    </Stack>
+                    <Chip size="small" label={`${bulkSelectedIds.length} Selected`} color={bulkSelectedIds.length ? 'primary' : 'default'} sx={{ fontWeight: 700, height: 22 }} />
+                  </Box>
+                  <Box sx={{ maxHeight: 280, overflowY: 'auto' }}>
+                    {candidates.length === 0 ? (
+                      <Typography variant="caption" sx={{ display: 'block', p: 2, textAlign: 'center', color: '#64748B' }}>
+                        No students match this filter.
+                      </Typography>
+                    ) : (
+                      candidates.map((s) => {
+                        const checked = bulkSelectedIds.includes(s.id);
+                        const curGrp = (db.trainingGroups || []).find((g) => g.id === s.groupId);
+                        return (
+                          <Box
+                            key={s.id}
+                            onClick={() => {
+                              setBulkSelectedIds((prev) =>
+                                prev.includes(s.id) ? prev.filter((id) => id !== s.id) : [...prev, s.id]
+                              );
+                            }}
+                            sx={{
+                              px: 1.5,
+                              py: 0.75,
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'space-between',
+                              borderBottom: '1px solid #F1F5F9',
+                              cursor: 'pointer',
+                              bgcolor: checked ? '#EFF6FF' : 'transparent',
+                              '&:hover': { bgcolor: checked ? '#DBEAFE' : '#F8FAFC' }
+                            }}
+                          >
+                            <Stack direction="row" alignItems="center" spacing={1} sx={{ minWidth: 0 }}>
+                              <Checkbox size="small" checked={checked} sx={{ p: 0.3 }} />
+                              <Box sx={{ minWidth: 0 }}>
+                                <Typography variant="body2" noWrap sx={{ fontWeight: 700, color: '#0F172A', fontSize: '0.82rem' }}>
+                                  {s.name}
+                                </Typography>
+                                <Typography variant="caption" sx={{ color: '#64748B', fontSize: '0.7rem' }}>
+                                  {s.tgid} • {s.phone || '—'}
+                                </Typography>
+                              </Box>
+                            </Stack>
+                            <Chip
+                              size="small"
+                              label={curGrp?.groupCode || 'Unassigned'}
+                              variant="outlined"
+                              sx={{ fontSize: '0.68rem', height: 20, maxWidth: 150 }}
+                            />
+                          </Box>
+                        );
+                      })
+                    )}
+                  </Box>
+                </Paper>
+              );
+            })()}
+          </Stack>
+        </DialogContent>
+        <DialogActions sx={{ px: 2.2, py: 1.4, borderTop: '1px solid #E2E8F0', bgcolor: '#FFFFFF' }}>
+          <Button onClick={() => setOpenBulkTransfer(false)} color="inherit" sx={{ fontWeight: 700 }}>
+            Cancel
+          </Button>
+          <Button
+            variant="contained"
+            disabled={!bulkSelectedIds.length || !bulkTargetGroupId}
+            onClick={handleBulkTransferSave}
+            startIcon={<SwapHorizIcon />}
+            sx={{ bgcolor: '#0F2E5A', fontWeight: 800, '&:hover': { bgcolor: '#1E3A8A' } }}
+          >
+            Transfer {bulkSelectedIds.length || ''} Student{bulkSelectedIds.length === 1 ? '' : 's'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+    </Box>
+  );
+}

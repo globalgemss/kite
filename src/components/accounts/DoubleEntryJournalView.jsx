@@ -1,0 +1,586 @@
+import React, { useState } from 'react';
+import {
+  Box,
+  Card,
+  Typography,
+  Button,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TableRow,
+  Chip,
+  IconButton,
+  TextField,
+  MenuItem,
+  Stack,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  Paper,
+  Tooltip,
+  Alert,
+  Grid
+} from '@mui/material';
+import AddIcon from '@mui/icons-material/Add';
+import UndoIcon from '@mui/icons-material/Undo';
+import VisibilityIcon from '@mui/icons-material/Visibility';
+import ReceiptLongIcon from '@mui/icons-material/ReceiptLong';
+import SearchIcon from '@mui/icons-material/Search';
+import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
+
+import { postDoubleEntryJournal, reverseDoubleEntryJournal } from '../../services/storage';
+
+export default function DoubleEntryJournalView({ db, setDb, showToast }) {
+  const [search, setSearch] = useState('');
+  const [statusFilter, setStatusFilter] = useState('ALL');
+  const [selectedEntry, setSelectedEntry] = useState(null);
+
+  // New Journal Dialog
+  const [openNewDialog, setOpenNewDialog] = useState(false);
+  const [narration, setNarration] = useState('');
+  const [entryDate, setEntryDate] = useState(new Date().toISOString().slice(0, 10));
+  const [lines, setLines] = useState([
+    { accountCode: '1010', debit: '', credit: '', lineNarration: '' },
+    { accountCode: '4100', debit: '', credit: '', lineNarration: '' }
+  ]);
+
+  // Reversal Dialog
+  const [reversalTarget, setReversalTarget] = useState(null);
+  const [reversalReason, setReversalReason] = useState('');
+
+  const coa = db.chartOfAccounts || [];
+  const journals = db.journalEntries || [];
+
+  const filteredJournals = journals.filter((j) => {
+    const q = search.toLowerCase();
+    const matchesSearch =
+      (j.entryNumber || '').toLowerCase().includes(q) ||
+      (j.narration || '').toLowerCase().includes(q);
+    const matchesStatus = statusFilter === 'ALL' || j.status === statusFilter;
+    return matchesSearch && matchesStatus;
+  });
+
+  // Calculate live debit/credit in new journal modal
+  const totalDebit = lines.reduce((sum, l) => sum + (Number(l.debit) || 0), 0);
+  const totalCredit = lines.reduce((sum, l) => sum + (Number(l.credit) || 0), 0);
+  const isBalanced = totalDebit > 0 && Math.abs(totalDebit - totalCredit) < 0.01;
+
+  const handleAddLine = () => {
+    setLines([...lines, { accountCode: '1010', debit: '', credit: '', lineNarration: '' }]);
+  };
+
+  const handleRemoveLine = (idx) => {
+    if (lines.length <= 2) return;
+    setLines(lines.filter((_, i) => i !== idx));
+  };
+
+  const handleLineChange = (index, field, value) => {
+    const updated = [...lines];
+    updated[index][field] = value;
+    // Single line cannot have both debit and credit
+    if (field === 'debit' && Number(value) > 0) updated[index]['credit'] = '';
+    if (field === 'credit' && Number(value) > 0) updated[index]['debit'] = '';
+    setLines(updated);
+  };
+
+  const handlePostJournal = () => {
+    if (!narration.trim()) {
+      showToast('Please enter the voucher narration.', 'error');
+      return;
+    }
+    if (!isBalanced) {
+      showToast(`Voucher is imbalanced! Total Dr (Rs. ${totalDebit}) != Total Cr (Rs. ${totalCredit})`, 'error');
+      return;
+    }
+
+    try {
+      const processedLines = lines
+        .filter((l) => Number(l.debit) > 0 || Number(l.credit) > 0)
+        .map((l) => {
+          const acc = coa.find((a) => a.code === l.accountCode);
+          return {
+            accountCode: l.accountCode,
+            accountName: acc?.name || '',
+            debit: Number(l.debit) || 0,
+            credit: Number(l.credit) || 0,
+            lineNarration: l.lineNarration || narration
+          };
+        });
+
+      const { nextDb, newEntry } = postDoubleEntryJournal(db, {
+        narration: narration.trim(),
+        lines: processedLines,
+        sourceModule: 'MANUAL',
+        entryDate
+      });
+
+      setDb(nextDb);
+      showToast(`Journal voucher ${newEntry.entryNumber} posted successfully!`);
+      setOpenNewDialog(false);
+      setNarration('');
+      setLines([
+        { accountCode: '1010', debit: '', credit: '', lineNarration: '' },
+        { accountCode: '4100', debit: '', credit: '', lineNarration: '' }
+      ]);
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+  };
+
+  const handleConfirmReversal = () => {
+    if (!reversalReason.trim()) {
+      showToast('Reason for reversal is required.', 'error');
+      return;
+    }
+    try {
+      const nextDb = reverseDoubleEntryJournal(db, reversalTarget.id, reversalReason.trim());
+      setDb(nextDb);
+      showToast(`Voucher ${reversalTarget.entryNumber} reversed!`);
+      setReversalTarget(null);
+      setReversalReason('');
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+  };
+
+  return (
+    <Box sx={{ p: { xs: 1.5, sm: 2.2 } }}>
+      {/* Slim 1-Row Executive Header Bar */}
+      <Card
+        elevation={0}
+        sx={{
+          py: { xs: 1.25, sm: 1.5 },
+          px: { xs: 1.75, sm: 2.25 },
+          mb: 1.75,
+          borderRadius: 2.5,
+          background: 'linear-gradient(135deg, #0f2e5a 0%, #1e3a8a 100%)',
+          color: '#ffffff',
+          boxShadow: '0 4px 14px rgba(15, 46, 90, 0.16)'
+        }}
+      >
+        <Grid container spacing={1.5} alignItems="center">
+          <Grid item xs={12} md={8}>
+            <Stack direction="row" spacing={1.2} alignItems="center">
+              <Box
+                sx={{
+                  width: 34,
+                  height: 34,
+                  borderRadius: 1.8,
+                  bgcolor: 'rgba(245, 158, 11, 0.16)',
+                  border: '1px solid rgba(245, 158, 11, 0.35)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  flexShrink: 0
+                }}
+              >
+                <ReceiptLongIcon sx={{ fontSize: 20, color: '#fbbf24' }} />
+              </Box>
+              <Box sx={{ minWidth: 0 }}>
+                <Typography
+                  variant="subtitle1"
+                  noWrap
+                  sx={{ fontWeight: 800, color: '#ffffff', fontSize: { xs: '0.96rem', sm: '1.06rem' }, lineHeight: 1.2 }}
+                >
+                  Double-Entry General Journal &amp; Day Book
+                </Typography>
+                <Typography
+                  variant="caption"
+                  noWrap
+                  sx={{ color: '#cbd5e1', display: 'block', fontSize: '0.73rem', mt: 0.15 }}
+                >
+                  Prabidhik School, Jorpati • Balanced Debit and Credit entries for every financial transaction (Debit = Credit Verification)
+                </Typography>
+              </Box>
+            </Stack>
+          </Grid>
+          <Grid item xs={12} md={4} sx={{ textAlign: { xs: 'left', md: 'right' } }}>
+            <Stack direction="row" spacing={1} justifyContent={{ xs: 'flex-start', md: 'flex-end' }} flexWrap="wrap" useFlexGap>
+              <Button
+                variant="contained"
+                size="small"
+                startIcon={<AddIcon sx={{ fontSize: '15px !important' }} />}
+                onClick={() => setOpenNewDialog(true)}
+                sx={{
+                  bgcolor: '#f59e0b',
+                  color: '#0f2e5a',
+                  fontWeight: 800,
+                  fontSize: '0.76rem',
+                  px: 1.4,
+                  py: 0.65,
+                  whiteSpace: 'nowrap',
+                  textTransform: 'none',
+                  boxShadow: 'none',
+                  '&:hover': { bgcolor: '#d97706', color: '#ffffff' }
+                }}
+              >
+                + Post Journal Entry
+              </Button>
+            </Stack>
+          </Grid>
+        </Grid>
+      </Card>
+
+      {/* Compact Filters */}
+      <Card elevation={0} sx={{ p: 1.25, mb: 1.75, borderRadius: 2, border: '1px solid #E2E8F0', bgcolor: '#FFFFFF' }}>
+        <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.25} alignItems="center">
+          <TextField
+            size="small"
+            placeholder="Search by JV Number or Narration..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            InputProps={{ startAdornment: <SearchIcon sx={{ color: '#94A3B8', mr: 1, fontSize: 18 }} /> }}
+            sx={{ minWidth: { xs: '100%', sm: 320 } }}
+          />
+          <TextField
+            select
+            size="small"
+            label="Status"
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value)}
+            sx={{ minWidth: { xs: '100%', sm: 160 } }}
+          >
+            <MenuItem value="ALL">All Status</MenuItem>
+            <MenuItem value="POSTED">POSTED</MenuItem>
+            <MenuItem value="REVERSED">REVERSED</MenuItem>
+          </TextField>
+        </Stack>
+      </Card>
+
+      {/* Journal Entries Table */}
+      <Card elevation={0} sx={{ borderRadius: 2, overflow: 'hidden', border: '1px solid #E2E8F0' }}>
+        <TableContainer>
+          <Table size="small">
+            <TableHead
+              sx={{
+                bgcolor: '#0F2E5A',
+                '& .MuiTableCell-head': {
+                  bgcolor: '#0F2E5A !important',
+                  color: '#FFFFFF !important',
+                  fontWeight: 800,
+                  fontSize: '0.72rem',
+                  py: 1,
+                  px: 1.25,
+                  borderBottom: '2px solid #F59E0B',
+                  whiteSpace: 'nowrap'
+                }
+              }}
+            >
+              <TableRow>
+                <TableCell sx={{ fontWeight: 800, width: 130, color: '#FFFFFF !important' }}>JV Number</TableCell>
+                <TableCell sx={{ fontWeight: 800, width: 110, color: '#FFFFFF !important' }}>Date</TableCell>
+                <TableCell sx={{ fontWeight: 800, color: '#FFFFFF !important' }}>Narration</TableCell>
+                <TableCell sx={{ fontWeight: 800, width: 130, color: '#FFFFFF !important' }}>Source Module</TableCell>
+                <TableCell sx={{ fontWeight: 800, textAlign: 'right', width: 140, color: '#FFFFFF !important' }}>Total Amount</TableCell>
+                <TableCell sx={{ fontWeight: 800, textAlign: 'center', width: 110, color: '#FFFFFF !important' }}>Status</TableCell>
+                <TableCell sx={{ fontWeight: 800, textAlign: 'right', width: 110, color: '#FFFFFF !important' }}>Actions</TableCell>
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {filteredJournals.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={7} sx={{ textAlign: 'center', py: 4, color: '#64748B' }}>
+                    No journal entries found.
+                  </TableCell>
+                </TableRow>
+              ) : (
+                filteredJournals.map((j) => {
+                  const entryTotal = (j.lines || []).reduce((sum, l) => sum + (Number(l.debit) || 0), 0);
+                  const isReversed = j.status === 'REVERSED';
+                  return (
+                    <TableRow key={j.id} hover>
+                      <TableCell sx={{ fontWeight: 800, color: '#1E40AF' }}>
+                        {j.entryNumber}
+                      </TableCell>
+                      <TableCell sx={{ fontWeight: 600 }}>{j.entryDate}</TableCell>
+                      <TableCell>
+                        <Typography variant="body2" sx={{ fontWeight: 700, color: '#1E293B' }}>
+                          {j.narration}
+                        </Typography>
+                        <Typography variant="caption" sx={{ color: '#64748B' }}>
+                          Posted by: {j.postedBy || 'System'}
+                        </Typography>
+                      </TableCell>
+                      <TableCell>
+                        <Chip label={j.sourceModule} size="small" sx={{ fontWeight: 700, fontSize: '0.72rem' }} />
+                      </TableCell>
+                      <TableCell sx={{ textAlign: 'right', fontWeight: 800, color: '#0F172A' }}>
+                        Rs. {entryTotal.toLocaleString()}
+                      </TableCell>
+                      <TableCell sx={{ textAlign: 'center' }}>
+                        <Chip
+                          label={j.status}
+                          size="small"
+                          sx={{
+                            fontWeight: 800,
+                            bgcolor: isReversed ? '#FEE2E2' : '#DCFCE7',
+                            color: isReversed ? '#DC2626' : '#166534'
+                          }}
+                        />
+                      </TableCell>
+                      <TableCell sx={{ textAlign: 'right' }}>
+                        <Tooltip title="View Dr/Cr Details">
+                          <IconButton size="small" onClick={() => setSelectedEntry(j)} sx={{ color: '#1E40AF' }}>
+                            <VisibilityIcon fontSize="small" />
+                          </IconButton>
+                        </Tooltip>
+                        {!isReversed && (
+                          <Tooltip title="Reverse Journal Entry">
+                            <IconButton
+                              size="small"
+                              onClick={() => {
+                                setReversalTarget(j);
+                                setReversalReason('');
+                              }}
+                              sx={{ color: '#DC2626' }}
+                            >
+                              <UndoIcon fontSize="small" />
+                            </IconButton>
+                          </Tooltip>
+                        )}
+                      </TableCell>
+                    </TableRow>
+                  );
+                })
+              )}
+            </TableBody>
+          </Table>
+        </TableContainer>
+      </Card>
+
+      {/* View Detail Modal */}
+      {selectedEntry && (
+        <Dialog open={Boolean(selectedEntry)} onClose={() => setSelectedEntry(null)} maxWidth="md" fullWidth>
+          <DialogTitle sx={{ fontWeight: 800, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span>Journal Voucher Details: {selectedEntry.entryNumber}</span>
+            <Chip
+              label={selectedEntry.status}
+              size="small"
+              sx={{
+                fontWeight: 800,
+                bgcolor: selectedEntry.status === 'REVERSED' ? '#FEE2E2' : '#DCFCE7',
+                color: selectedEntry.status === 'REVERSED' ? '#DC2626' : '#166534'
+              }}
+            />
+          </DialogTitle>
+          <DialogContent dividers>
+            <Box sx={{ mb: 2 }}>
+              <Typography variant="body2" sx={{ fontWeight: 700, color: '#334155' }}>
+                Date: {selectedEntry.entryDate} • Posted By: {selectedEntry.postedBy}
+              </Typography>
+              <Typography variant="subtitle1" sx={{ fontWeight: 800, color: '#0F172A', mt: 0.5 }}>
+                {selectedEntry.narration}
+              </Typography>
+            </Box>
+
+            <TableContainer component={Paper} variant="outlined" sx={{ borderRadius: 2 }}>
+              <Table size="small">
+                <TableHead sx={{ bgcolor: '#F8FAFC' }}>
+                  <TableRow>
+                    <TableCell sx={{ fontWeight: 800 }}>Account Code & Name</TableCell>
+                    <TableCell sx={{ fontWeight: 800 }}>Line Note</TableCell>
+                    <TableCell sx={{ fontWeight: 800, textAlign: 'right' }}>Debit (Dr)</TableCell>
+                    <TableCell sx={{ fontWeight: 800, textAlign: 'right' }}>Credit (Cr)</TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {selectedEntry.lines.map((l, i) => (
+                    <TableRow key={i}>
+                      <TableCell sx={{ fontWeight: 700 }}>
+                        <Typography variant="body2" sx={{ fontWeight: 800, color: '#1E40AF' }}>
+                          {l.accountCode}
+                        </Typography>
+                        <Typography variant="caption" sx={{ color: '#475569' }}>
+                          {l.accountName}
+                        </Typography>
+                      </TableCell>
+                      <TableCell sx={{ color: '#64748B', fontSize: '0.82rem' }}>{l.lineNarration || '-'}</TableCell>
+                      <TableCell sx={{ textAlign: 'right', fontWeight: 800, color: l.debit > 0 ? '#1E293B' : '#94A3B8' }}>
+                        {l.debit > 0 ? `Rs. ${Number(l.debit).toLocaleString()}` : '-'}
+                      </TableCell>
+                      <TableCell sx={{ textAlign: 'right', fontWeight: 800, color: l.credit > 0 ? '#1E293B' : '#94A3B8' }}>
+                        {l.credit > 0 ? `Rs. ${Number(l.credit).toLocaleString()}` : '-'}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                  <TableRow sx={{ bgcolor: '#F1F5F9' }}>
+                    <TableCell colSpan={2} sx={{ fontWeight: 900 }}>Total Balance (Dr == Cr)</TableCell>
+                    <TableCell sx={{ textAlign: 'right', fontWeight: 900, color: '#166534' }}>
+                      Rs. {selectedEntry.lines.reduce((s, l) => s + (Number(l.debit) || 0), 0).toLocaleString()}
+                    </TableCell>
+                    <TableCell sx={{ textAlign: 'right', fontWeight: 900, color: '#166534' }}>
+                      Rs. {selectedEntry.lines.reduce((s, l) => s + (Number(l.credit) || 0), 0).toLocaleString()}
+                    </TableCell>
+                  </TableRow>
+                </TableBody>
+              </Table>
+            </TableContainer>
+          </DialogContent>
+          <DialogActions sx={{ p: 2 }}>
+            <Button onClick={() => setSelectedEntry(null)} sx={{ fontWeight: 700 }}>Close</Button>
+          </DialogActions>
+        </Dialog>
+      )}
+
+      {/* New Manual Journal Dialog */}
+      <Dialog open={openNewDialog} onClose={() => setOpenNewDialog(false)} maxWidth="md" fullWidth>
+        <DialogTitle sx={{ fontWeight: 800 }}>+ New Double-Entry Journal Entry</DialogTitle>
+        <DialogContent dividers>
+          <Grid container spacing={2} sx={{ mb: 2.5 }}>
+            <Grid item xs={12} sm={4}>
+              <TextField
+                fullWidth
+                size="small"
+                type="date"
+                label="Voucher Date"
+                value={entryDate}
+                onChange={(e) => setEntryDate(e.target.value)}
+                InputLabelProps={{ shrink: true }}
+              />
+            </Grid>
+            <Grid item xs={12} sm={8}>
+              <TextField
+                fullWidth
+                size="small"
+                label="Narration / Particulars"
+                placeholder="e.g. Center Maintenance & IT supplies purchase"
+                value={narration}
+                onChange={(e) => setNarration(e.target.value)}
+                required
+              />
+            </Grid>
+          </Grid>
+
+          <Typography variant="subtitle2" sx={{ fontWeight: 800, mb: 1, color: '#1E293B' }}>
+            Journal Debit & Credit Lines:
+          </Typography>
+
+          <Stack spacing={1.5}>
+            {lines.map((line, idx) => (
+              <Box key={idx} sx={{ display: 'flex', gap: 1.5, alignItems: 'center' }}>
+                <TextField
+                  select
+                  size="small"
+                  label={`Line ${idx + 1} Account`}
+                  value={line.accountCode}
+                  onChange={(e) => handleLineChange(idx, 'accountCode', e.target.value)}
+                  sx={{ minWidth: 260 }}
+                >
+                  {coa.map((a) => (
+                    <MenuItem key={a.code} value={a.code}>
+                      <strong>{a.code}</strong> - {a.name} ({a.type})
+                    </MenuItem>
+                  ))}
+                </TextField>
+
+                <TextField
+                  size="small"
+                  type="number"
+                  label="Debit (Dr)"
+                  value={line.debit}
+                  onChange={(e) => handleLineChange(idx, 'debit', e.target.value)}
+                  sx={{ width: 140 }}
+                />
+
+                <TextField
+                  size="small"
+                  type="number"
+                  label="Credit (Cr)"
+                  value={line.credit}
+                  onChange={(e) => handleLineChange(idx, 'credit', e.target.value)}
+                  sx={{ width: 140 }}
+                />
+
+                <TextField
+                  size="small"
+                  label="Line Remark"
+                  placeholder="Optional"
+                  value={line.lineNarration}
+                  onChange={(e) => handleLineChange(idx, 'lineNarration', e.target.value)}
+                  sx={{ flex: 1 }}
+                />
+
+                <IconButton size="small" onClick={() => handleRemoveLine(idx)} disabled={lines.length <= 2} sx={{ color: '#DC2626' }}>
+                  <DeleteOutlineIcon fontSize="small" />
+                </IconButton>
+              </Box>
+            ))}
+          </Stack>
+
+          <Box sx={{ mt: 2, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <Button size="small" onClick={handleAddLine} startIcon={<AddIcon />} sx={{ fontWeight: 700 }}>
+              + Add Line
+            </Button>
+
+            <Box sx={{ display: 'flex', gap: 2, alignItems: 'center' }}>
+              <Typography variant="body2" sx={{ fontWeight: 800 }}>
+                Total Dr: <strong>Rs. {totalDebit.toLocaleString()}</strong>
+              </Typography>
+              <Typography variant="body2" sx={{ fontWeight: 800 }}>
+                Total Cr: <strong>Rs. {totalCredit.toLocaleString()}</strong>
+              </Typography>
+              <Chip
+                label={isBalanced ? 'Balanced' : 'Imbalanced'}
+                size="small"
+                sx={{
+                  fontWeight: 800,
+                  bgcolor: isBalanced ? '#DCFCE7' : '#FEE2E2',
+                  color: isBalanced ? '#166534' : '#DC2626'
+                }}
+              />
+            </Box>
+          </Box>
+        </DialogContent>
+        <DialogActions sx={{ p: 2 }}>
+          <Button onClick={() => setOpenNewDialog(false)}>Cancel</Button>
+          <Button
+            variant="contained"
+            disabled={!isBalanced || !narration.trim()}
+            onClick={handlePostJournal}
+            sx={{ fontWeight: 800 }}
+          >
+            Post Journal
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Reversal Confirmation Dialog */}
+      {reversalTarget && (
+        <Dialog open={Boolean(reversalTarget)} onClose={() => setReversalTarget(null)} maxWidth="sm" fullWidth>
+          <DialogTitle sx={{ fontWeight: 800, color: '#DC2626' }}>
+            🔄 Reverse Journal Entry
+          </DialogTitle>
+          <DialogContent dividers>
+            <Alert severity="warning" sx={{ mb: 2, fontWeight: 600 }}>
+              This action creates a new inverse voucher for <strong>{reversalTarget.entryNumber}</strong>. Original vouchers are never deleted.
+            </Alert>
+            <TextField
+              fullWidth
+              size="small"
+              label="Reason for Reversal"
+              placeholder="e.g. Duplicate entry by mistake / Wrong amount entered"
+              value={reversalReason}
+              onChange={(e) => setReversalReason(e.target.value)}
+              required
+            />
+          </DialogContent>
+          <DialogActions sx={{ p: 2 }}>
+            <Button onClick={() => setReversalTarget(null)}>Cancel</Button>
+            <Button
+              variant="contained"
+              color="error"
+              disabled={!reversalReason.trim()}
+              onClick={handleConfirmReversal}
+              sx={{ fontWeight: 800 }}
+            >
+              Confirm Reversal
+            </Button>
+          </DialogActions>
+        </Dialog>
+      )}
+    </Box>
+  );
+}
